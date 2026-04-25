@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { getBundledPluginPublicSurfaceStub } from "../plugin-sdk/disabled-stubs/registry.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "./jiti-loader-cache.js";
 import { resolveBundledPluginPublicSurfacePath } from "./public-surface-runtime.js";
@@ -147,6 +148,10 @@ export function loadBundledPluginPublicArtifactModuleSync<T extends object>(para
 }): T {
   const location = resolvePublicSurfaceLocation(params);
   if (!location) {
+    const stub = getBundledPluginPublicSurfaceStub(params) as T | undefined;
+    if (stub) {
+      return stub;
+    }
     throw new Error(
       `Unable to resolve bundled plugin public surface ${params.dirName}/${params.artifactBasename}`,
     );

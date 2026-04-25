@@ -86,6 +86,9 @@ function listBundledCapabilityManifests(): readonly BundledCapabilityManifest[] 
   if (!scanDir) {
     return [];
   }
+  if (!fs.existsSync(scanDir)) {
+    return [];
+  }
   return fs
     .readdirSync(scanDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())

@@ -1,7 +1,7 @@
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { createJiti } from "jiti";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import {
@@ -14,10 +14,10 @@ import {
   resolveBundledPluginPublicSurfacePath,
 } from "../plugins/public-surface-runtime.js";
 import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
+import { getBundledPluginPublicSurfaceStub } from "./disabled-stubs/registry.js";
 
 const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
 
-const nodeRequire = createRequire(import.meta.url);
 const jitiLoaders: PluginJitiLoaderCache = new Map();
 const loadedFacadeModules = new Map<string, unknown>();
 const loadedFacadePluginIds = new Set<string>();
@@ -35,7 +35,6 @@ function getJitiFactory() {
   if (facadeLoaderJitiFactory) {
     return facadeLoaderJitiFactory;
   }
-  const { createJiti } = nodeRequire("jiti") as typeof import("jiti");
   facadeLoaderJitiFactory = createJiti;
   return facadeLoaderJitiFactory;
 }
@@ -265,6 +264,10 @@ export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(param
 }): T {
   const location = resolveFacadeModuleLocation(params);
   if (!location) {
+    const stub = getBundledPluginPublicSurfaceStub(params) as T | undefined;
+    if (stub) {
+      return stub;
+    }
     throw new Error(
       `Unable to resolve bundled plugin public surface ${params.dirName}/${params.artifactBasename}`,
     );
@@ -283,6 +286,10 @@ export async function loadBundledPluginPublicSurfaceModule<T extends object>(par
 }): Promise<T> {
   const location = resolveFacadeModuleLocation(params);
   if (!location) {
+    const stub = getBundledPluginPublicSurfaceStub(params) as T | undefined;
+    if (stub) {
+      return stub;
+    }
     throw new Error(
       `Unable to resolve bundled plugin public surface ${params.dirName}/${params.artifactBasename}`,
     );

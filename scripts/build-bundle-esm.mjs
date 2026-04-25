@@ -33,15 +33,55 @@ const createRequireRewritePlugin = {
       if (!source.includes("createRequire(import.meta.url)")) {
         return null;
       }
-      const rewritten = source
-        .replace(/createRequire\(import\.meta\.url\)\(("[^"]+"|'[^']+')\)/g, "require($1)")
-        // Remove `const require = createRequire(import.meta.url)` declarations
-        // entirely — the banner already provides a working `require`. Replacing
-        // with `require` would create a self-referencing `const require = require`.
-        .replace(
-          /(?:const|let|var)\s+[\w$]+\s*=\s*createRequire\(import\.meta\.url\)(?!\();\n?/g,
-          "",
-        );
+      let rewritten = source.replace(
+        /createRequire\(import\.meta\.url\)\(("[^"]+"|'[^']+')\)/g,
+        "require($1)",
+      );
+
+      // Collect literal `./*.runtime.{js,ts}` candidates referenced in this
+      // file. These are the modules that callers will pass as variables to a
+      // dynamic require, and esbuild can't see those dynamic calls.
+      // Only collect .js candidates — esbuild is bundling already-compiled
+      // dist/*.js output, so .ts candidates are unresolvable runtime fallbacks
+      // (used only by jiti dev paths). Including them produces resolve errors.
+      const runtimeCandidatePattern = /["']\.\/[\w./-]+\.runtime\.js["']/g;
+      const candidates = new Set();
+      for (const match of rewritten.matchAll(runtimeCandidatePattern)) {
+        candidates.add(match[0].slice(1, -1));
+      }
+
+      // Rewrite `const X = createRequire(import.meta.url)`:
+      // - If X === "require": delete (banner already provides require).
+      // - If we have known runtime candidates: replace with a switch wrapper
+      //   that calls static `require("./literal")` for each known candidate so
+      //   esbuild bundles them and the dynamic `X(candidate)` call resolves
+      //   through the bundle's module map at runtime.
+      // - Otherwise: alias X to the banner's require.
+      rewritten = rewritten.replace(
+        /((?:const|let|var)\s+)([\w$]+)(\s*=\s*)createRequire\(import\.meta\.url\)(?!\()(;\n?)/g,
+        (_match, decl, name, eq, end) => {
+          if (name === "require") {
+            return "";
+          }
+          if (candidates.size > 0) {
+            const cases = Array.from(candidates)
+              .map((c) => `case ${JSON.stringify(c)}:return require(${JSON.stringify(c)});`)
+              .join("");
+            return `${decl}${name}${eq}((__c)=>{switch(__c){${cases}default:return require(__c);}})${end}`;
+          }
+          return `${decl}${name}${eq}require${end}`;
+        },
+      );
+
+      // Belt-and-suspenders: also append top-level static requires so esbuild
+      // bundles the runtime modules even if the createRequire pattern wasn't
+      // matched (e.g. a callsite that constructs require some other way).
+      if (candidates.size > 0) {
+        const stub = Array.from(candidates)
+          .map((c) => `try{require(${JSON.stringify(c)});}catch{}`)
+          .join("");
+        rewritten += `\n;(()=>{${stub}})();\n`;
+      }
       return rewritten === source ? null : { contents: rewritten, loader: "js" };
     });
   },
