@@ -7,7 +7,7 @@ Files modified:
 - Build/profile contract: scripts/build-bundle-esm.mjs, .fork/bundle-profile.vercel-sandbox.json
 - Verifier and smoke: scripts/verify-vercel-bundle-contract.mjs, scripts/smoke-vercel-bundle-local.mjs
 - Package metadata: package.json, pnpm-lock.yaml
-- Notes: .notes/bundle-recommendations-fork.md was updated locally, but .notes/ is ignored by /Users/johnlindquist/.gitignore in this checkout and could not be included through the repo pre-commit hook.
+- Notes: .notes/bundle-recommendations-fork.md
 
 Verification:
 - pnpm tsgo: PASS.
@@ -38,4 +38,3 @@ Skipped:
 - No Vercel Blob upload was performed; only the missing-token dry run was executed, as requested.
 - No vclaw changes were made.
 - No unrelated WIP files were edited or reverted.
-- The .notes/bundle-recommendations-fork.md change was not committed because the path is globally ignored and the repo pre-commit hook restages without -f.
