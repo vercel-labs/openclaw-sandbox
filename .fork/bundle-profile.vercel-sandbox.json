@@ -6,7 +6,7 @@
     "@reflink/reflink": "build/stubs/disabled-optional.cjs",
     "@napi-rs/canvas": "build/stubs/disabled-optional.cjs"
   },
-  "externalRuntimeDeps": ["jiti", "@sinclair/typebox", "zod"],
+  "externalRuntimeDeps": ["jiti"],
   "disabledPublicSurfaces": [
     {
       "dirName": "speech-core",

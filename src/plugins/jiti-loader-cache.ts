@@ -1,4 +1,5 @@
-import { createJiti } from "jiti";
+import { createRequire } from "node:module";
+import type { createJiti } from "jiti";
 import {
   buildPluginLoaderJitiOptions,
   createPluginLoaderJitiCacheKey,
@@ -8,6 +9,20 @@ import {
 export type PluginJitiLoader = ReturnType<typeof createJiti>;
 export type PluginJitiLoaderFactory = typeof createJiti;
 export type PluginJitiLoaderCache = Map<string, PluginJitiLoader>;
+
+let cachedDefaultCreateJiti: PluginJitiLoaderFactory | undefined;
+function getDefaultCreateJiti(): PluginJitiLoaderFactory {
+  if (cachedDefaultCreateJiti) {
+    return cachedDefaultCreateJiti;
+  }
+  // Load jiti via CJS require so the bundle has a single transport for jiti.
+  // See facade-loader.ts for the dual-load incident this avoids.
+  const jitiModule = createRequire(import.meta.url)("jiti") as {
+    createJiti: PluginJitiLoaderFactory;
+  };
+  cachedDefaultCreateJiti = jitiModule.createJiti;
+  return cachedDefaultCreateJiti;
+}
 
 export function getCachedPluginJitiLoader(params: {
   cache: PluginJitiLoaderCache;
@@ -51,10 +66,13 @@ export function getCachedPluginJitiLoader(params: {
   if (cached) {
     return cached;
   }
-  const loader = (params.createLoader ?? createJiti)(params.jitiFilename ?? params.modulePath, {
-    ...buildPluginLoaderJitiOptions(aliasMap),
-    tryNative,
-  });
+  const loader = (params.createLoader ?? getDefaultCreateJiti())(
+    params.jitiFilename ?? params.modulePath,
+    {
+      ...buildPluginLoaderJitiOptions(aliasMap),
+      tryNative,
+    },
+  );
   params.cache.set(scopedCacheKey, loader);
   return loader;
 }

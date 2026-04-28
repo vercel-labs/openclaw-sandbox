@@ -517,8 +517,38 @@ function supportsNativeJitiRuntime(): boolean {
   return typeof versions.bun !== "string" && process.platform !== "win32";
 }
 
-function isBundledPluginDistModulePath(modulePath: string): boolean {
-  return modulePath.replace(/\\/g, "/").includes("/dist/extensions/");
+function safeRealpath(absolutePath: string): string {
+  try {
+    return fs.realpathSync.native(absolutePath);
+  } catch {
+    return absolutePath;
+  }
+}
+
+function isBundledPluginRuntimeModulePath(modulePath: string): boolean {
+  // macOS resolves `/var/folders/...` to `/private/var/folders/...` when
+  // path.resolve walks an existing inode but not when it just normalizes a
+  // string. Different jiti call sites pass paths in different forms, so a
+  // string comparison alone misses half of them. realpath both sides.
+  const normalizedModulePath = safeRealpath(path.resolve(modulePath));
+  const normalizedPortablePath = normalizedModulePath.replace(/\\/g, "/");
+  if (normalizedPortablePath.includes("/dist/extensions/")) {
+    return true;
+  }
+  // Vercel-sandbox bundle layout extracts each plugin into
+  // <root>/extensions/<plugin>/. Without this branch, jiti falls into the
+  // native sync require-ESM path for those files, which on Node 22 surfaces
+  // as the "imported again after being required. Status = 0" dual-load when
+  // the slack channel hits its first `await import(...)`.
+  const bundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR?.trim();
+  if (!bundledPluginsDir) {
+    return false;
+  }
+  const normalizedBundledPluginsDir = safeRealpath(path.resolve(bundledPluginsDir));
+  return (
+    normalizedModulePath === normalizedBundledPluginsDir ||
+    normalizedModulePath.startsWith(`${normalizedBundledPluginsDir}${path.sep}`)
+  );
 }
 
 export function shouldPreferNativeJiti(modulePath: string): boolean {
@@ -542,7 +572,8 @@ export function resolvePluginLoaderJitiTryNative(
     preferBuiltDist?: boolean;
   },
 ): boolean {
-  if (isBundledPluginDistModulePath(modulePath)) {
+  const isBundledPlugin = isBundledPluginRuntimeModulePath(modulePath);
+  if (isBundledPlugin) {
     return false;
   }
   return (

@@ -15,7 +15,18 @@ type RegisterSlackHttpHandlerArgs = {
   accountId?: string;
 };
 
-const slackHttpRoutes = new Map<string, SlackHttpRequestHandler>();
+// Pin the registry to globalThis so dual-loaded module instances (e.g.
+// jiti-evaluated CJS vs native ESM) still share state. Without this pin a
+// route registered via the monitor module instance becomes invisible to the
+// request-time handler module instance and every inbound webhook returns 404.
+const SLACK_HTTP_ROUTES_GLOBAL_KEY = Symbol.for("openclaw.slack.httpRoutes");
+type SlackHttpRoutesGlobal = typeof globalThis & {
+  [SLACK_HTTP_ROUTES_GLOBAL_KEY]?: Map<string, SlackHttpRequestHandler>;
+};
+const slackGlobal = globalThis as SlackHttpRoutesGlobal;
+const slackHttpRoutes: Map<string, SlackHttpRequestHandler> =
+  slackGlobal[SLACK_HTTP_ROUTES_GLOBAL_KEY] ??
+  (slackGlobal[SLACK_HTTP_ROUTES_GLOBAL_KEY] = new Map());
 
 export function registerSlackHttpHandler(params: RegisterSlackHttpHandlerArgs): () => void {
   const normalizedPath = normalizeSlackWebhookPath(params.path);

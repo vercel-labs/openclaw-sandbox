@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import SlackBolt, * as SlackBoltNamespace from "@slack/bolt";
+import { createRequire } from "node:module";
 import {
   addAllowlistUserEntriesFromConfigEntry,
   buildAllowlistResolutionSummary,
@@ -128,9 +128,17 @@ let slackBoltInterop: SlackBoltResolvedExports | undefined;
 
 function getSlackBoltInterop(): SlackBoltResolvedExports {
   if (!slackBoltInterop) {
+    // Load @slack/bolt via CJS require. A static `import` from this CJS
+    // package while jiti's CJS require also reaches the same package triggers
+    // Node 22's "imported again after being required. Status = 0" dual-load
+    // error when the slack channel registers. The bolt module's runtime shape
+    // (App + HTTPReceiver constructors plus optional default export) is
+    // already normalized by resolveSlackBoltInterop, so a single CJS read is
+    // enough.
+    const boltModule = createRequire(import.meta.url)("@slack/bolt") as Record<string, unknown>;
     slackBoltInterop = resolveSlackBoltInterop({
-      defaultImport: SlackBolt,
-      namespaceImport: SlackBoltNamespace,
+      defaultImport: boltModule.default ?? boltModule,
+      namespaceImport: boltModule,
     });
   }
   return slackBoltInterop;

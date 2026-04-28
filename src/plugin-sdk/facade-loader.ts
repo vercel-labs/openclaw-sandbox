@@ -1,7 +1,7 @@
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { createJiti } from "jiti";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import {
@@ -35,7 +35,14 @@ function getJitiFactory() {
   if (facadeLoaderJitiFactory) {
     return facadeLoaderJitiFactory;
   }
-  facadeLoaderJitiFactory = createJiti;
+  // Load jiti via CJS require to match the rest of the bundle's transport.
+  // Mixing static `import "jiti"` with `require("jiti")` triggers Node 22's
+  // "Unexpected status of a module that is imported again after being
+  // required. Status = 0" when bundled extensions activate.
+  const jitiModule = createRequire(import.meta.url)("jiti") as {
+    createJiti: PluginJitiLoaderFactory;
+  };
+  facadeLoaderJitiFactory = jitiModule.createJiti;
   return facadeLoaderJitiFactory;
 }
 
