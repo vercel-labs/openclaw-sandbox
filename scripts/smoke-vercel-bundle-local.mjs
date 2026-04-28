@@ -20,6 +20,11 @@ const FORBIDDEN_OUTPUT = [
   "pnpm install",
   "yarn install",
   "corepack",
+  // Node 22 ESM/CJS dual-load — what slack hits when jiti is imported both
+  // ways. The build-side static-import guard in verify-vercel-bundle-contract
+  // should already prevent this; keep the runtime check as defense in depth.
+  "imported again after being required",
+  "Status = 0",
 ];
 
 function run(command, args, options) {

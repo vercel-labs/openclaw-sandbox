@@ -433,6 +433,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               const message = formatErrorMessage(err);
               setRuntime(channelId, id, { accountId: id, lastError: message });
               log.error?.(`[${id}] channel exited: ${message}`);
+              if (process.env.OPENCLAW_E2E_VERBOSE_ERRORS === "1") {
+                const stack = err instanceof Error && err.stack ? err.stack : String(err);
+                log.error?.(`[${id}] channel exit stack:\n${stack}`);
+              }
             })
             .finally(async () => {
               await cleanupTaskScopedApprovalRuntime("channel cleanup failed");

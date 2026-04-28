@@ -150,6 +150,29 @@ async function main() {
     );
   }
 
+  // Static-import dual-load guard.
+  // Bundling a static `import { ... } from "<dep>"` for a dep that is also
+  // marked external + loaded via the banner's `require(...)` triggers Node 22's
+  // "Unexpected status of a module that is imported again after being
+  // required. Status = 0" when bundled extensions activate. Catch this at the
+  // build/verify boundary instead of finding it in production logs.
+  const bundleSource = await readFile(path.join(OUT_DIR, "openclaw.bundle.mjs"), "utf8");
+  const externalRuntimeDeps = Array.isArray(manifest.externalRuntimeDeps)
+    ? manifest.externalRuntimeDeps
+    : [];
+  for (const dep of externalRuntimeDeps) {
+    const escapedDep = dep.replace(/[/\\^$*+?.()|[\]{}]/g, "\\$&");
+    const staticImportPattern = new RegExp(
+      String.raw`(?:^|[^\w$])import\s*(?:[\w$]+|\{[^}]*\}|\*\s+as\s+[\w$]+)?\s*(?:from\s*)?["']${escapedDep}["']`,
+      "u",
+    );
+    if (staticImportPattern.test(bundleSource)) {
+      fail(
+        `bundle contains static ESM import of external runtime dep "${dep}" — this conflicts with require("${dep}") and triggers Node 22 dual-load. Convert the offending source file to lazy createRequire(import.meta.url)("${dep}").`,
+      );
+    }
+  }
+
   const meta = await readJson(path.join(OUT_DIR, "meta.json"));
   const inputs = Object.keys(meta.inputs ?? {});
   for (const [moduleName, stubPath] of Object.entries(
