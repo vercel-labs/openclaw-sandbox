@@ -1,0 +1,40 @@
+T1 report: Manifest-driven Vercel Sandbox bundle contract + local smoke
+
+Files added:
+- .fork/bundle-profile.vercel-sandbox.json
+- scripts/verify-vercel-bundle-contract.mjs
+- scripts/smoke-vercel-bundle-local.mjs
+- last-message.txt
+
+Files modified:
+- scripts/build-bundle-esm.mjs
+- package.json
+
+Commands run:
+- node --check scripts/build-bundle-esm.mjs: PASS
+- node --check scripts/verify-vercel-bundle-contract.mjs: PASS
+- node --check scripts/smoke-vercel-bundle-local.mjs: PASS
+- pnpm exec oxfmt --check scripts/build-bundle-esm.mjs scripts/verify-vercel-bundle-contract.mjs scripts/smoke-vercel-bundle-local.mjs package.json .fork/bundle-profile.vercel-sandbox.json: PASS
+- pnpm exec oxlint scripts/build-bundle-esm.mjs scripts/verify-vercel-bundle-contract.mjs scripts/smoke-vercel-bundle-local.mjs: PASS
+- pnpm exec oxlint --type-aware --tsconfig tsconfig.oxlint.json --report-unused-disable-directives-severity error scripts/build-bundle-esm.mjs scripts/verify-vercel-bundle-contract.mjs scripts/smoke-vercel-bundle-local.mjs: PASS
+- pnpm tsgo: PASS
+- pnpm check: FAIL in pnpm lint. oxlint-tsgolint exits with SIGPIPE under Node v24.13.0. Retried with fnm exec --using 22 pnpm check and OPENCLAW_LOCAL_CHECK_MODE=throttled fnm exec --using 22 pnpm check; both failed the same way at node_modules/oxlint-tsgolint/bin/tsgolint.js with signal SIGPIPE before any source diagnostic. Targeted type-aware oxlint on the touched scripts passes.
+- pnpm build: PASS
+- pnpm build:vercel-sandbox-bundle: PASS
+- pnpm verify:vercel-sandbox-bundle: PASS with warning: openclaw.bundle.mjs exceeds warning budget: 32828205 > 31457280. It remains below the hard 41943040-byte budget.
+- pnpm smoke:vercel-sandbox-bundle:local: PASS. Final output: {"ok":true,"elapsedMs":578,"bundleSmoke":{"ok":true,"pluginCount":0,"errorCount":0},"pluginLoadProfileCount":0}
+
+Build-fail-fast experiment:
+- Temporarily changed .fork/bundle-profile.vercel-sandbox.json disabledPublicSurfaces to an empty array.
+- pnpm build:vercel-sandbox-bundle failed as expected with: bundle profile vercel-sandbox is missing disabledPublicSurfaces entries for disabled stub surface(s): speech-core/runtime-api.js
+- Restored the speech-core disabledPublicSurfaces entry, then pnpm build:vercel-sandbox-bundle and pnpm verify:vercel-sandbox-bundle passed again.
+
+Deviations from the spec:
+- I did not touch src/plugin-sdk/facade-loader.ts or src/plugins/public-surface-loader.ts.
+- I did not change the disabled-stub registry shape.
+- release.json currently contains profile, upstreamSha, forkSha, bundleSha256, and builtAt, matching the task spec. The broader plan's section 3 also mentions bundleContractSha256 and Node major; those were not requested in T1 and are not added here.
+- The local smoke does not see [plugin-load-profile] lines because the smoke loader run returns an empty plugin registry in the clean temp/no-install environment; the script reports pluginLoadProfileCount: 0 instead of failing on that count because T1 only required counting those lines.
+
+Notes for .notes/bundle-recommendations-fork.md:
+- The local smoke should clarify whether pluginLoadProfileCount is expected to be nonzero. In this implementation, the no-install temp smoke succeeds with pluginCount: 0 and pluginLoadProfileCount: 0.
+- The plan's section 3 release metadata mentions bundleContractSha256 and Node major, while the T1 task spec omits them. The plan should explicitly say whether T1 intentionally defers those fields.

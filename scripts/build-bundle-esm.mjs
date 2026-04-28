@@ -8,7 +8,10 @@
  * so CJS deps (like `debug`) that call require("tty") still work.
  */
 
-import { mkdir, stat, readFile, writeFile } from "node:fs/promises";
+import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { mkdtemp, mkdir, readdir, rm, stat, readFile, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -16,11 +19,147 @@ import { fileURLToPath } from "node:url";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "..");
 const DIST_ENTRY = path.join(REPO_ROOT, "dist", "entry.js");
-const STUB = path.join(REPO_ROOT, "build", "stubs", "disabled-optional.cjs");
 const OUT_DIR = path.join(REPO_ROOT, "dist-vercel-runtime", "moonshot");
 const OUT_FILE = path.join(OUT_DIR, "openclaw.bundle.mjs");
+const DEPS_OUT_FILE = path.join(OUT_DIR, "bundle-deps.tar.gz");
+const OPENCLAW_PKG_OUT_FILE = path.join(OUT_DIR, "bundle-openclaw-pkg.tar.gz");
+const DIST_EXTENSIONS_DIR = path.join(REPO_ROOT, "dist", "extensions");
+const SRC_PLUGIN_SDK_DIR = path.join(REPO_ROOT, "src", "plugin-sdk");
+const DISABLED_STUB_REGISTRY_FILE = path.join(SRC_PLUGIN_SDK_DIR, "disabled-stubs", "registry.ts");
+const PLUGIN_SDK_IMPORT_PATTERN =
+  /(?:from\s+["']openclaw\/plugin-sdk\/([^"']+)["']|import\s+["']openclaw\/plugin-sdk\/([^"']+)["'])/g;
+const PROFILE_NAME = process.env.OPENCLAW_BUNDLE_PROFILE ?? "vercel-sandbox";
+const PROFILE_PATH = path.join(REPO_ROOT, ".fork", `bundle-profile.${PROFILE_NAME}.json`);
 
 const log = (...parts) => process.stderr.write(parts.join(" ") + "\n");
+
+async function readJson(filePath) {
+  try {
+    return JSON.parse(await readFile(filePath, "utf8"));
+  } catch (err) {
+    if (err?.code === "ENOENT") {
+      throw new Error(
+        `missing bundle profile manifest for ${PROFILE_NAME}: ${path.relative(REPO_ROOT, filePath)}`,
+        { cause: err },
+      );
+    }
+    throw err;
+  }
+}
+
+function assertStringArray(value, fieldName) {
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string" || !entry)) {
+    throw new Error(`bundle profile ${PROFILE_NAME} has invalid ${fieldName}`);
+  }
+  return value;
+}
+
+function assertObject(value, fieldName) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`bundle profile ${PROFILE_NAME} has invalid ${fieldName}`);
+  }
+  return value;
+}
+
+async function loadBundleProfile() {
+  const manifest = await readJson(PROFILE_PATH);
+  if (manifest.profile !== PROFILE_NAME) {
+    throw new Error(
+      `bundle profile manifest mismatch: expected ${PROFILE_NAME}, got ${JSON.stringify(manifest.profile)}`,
+    );
+  }
+  assertObject(manifest.disabledOptionalNativeModules, "disabledOptionalNativeModules");
+  assertStringArray(manifest.externalRuntimeDeps, "externalRuntimeDeps");
+  if (!Array.isArray(manifest.disabledPublicSurfaces)) {
+    throw new Error(`bundle profile ${PROFILE_NAME} has invalid disabledPublicSurfaces`);
+  }
+  assertObject(manifest.budgets, "budgets");
+  return manifest;
+}
+
+function resolveRepoPath(relativePath) {
+  if (path.isAbsolute(relativePath)) {
+    throw new Error(`bundle profile paths must be repo-relative: ${relativePath}`);
+  }
+  return path.join(REPO_ROOT, relativePath);
+}
+
+function disabledSurfaceKey(surface) {
+  if (!surface || typeof surface !== "object") {
+    return null;
+  }
+  const { dirName, artifactBasename } = surface;
+  if (
+    typeof dirName !== "string" ||
+    !dirName ||
+    typeof artifactBasename !== "string" ||
+    !artifactBasename
+  ) {
+    return null;
+  }
+  return `${dirName}/${artifactBasename}`;
+}
+
+async function assertDisabledPublicSurfaceManifest(manifest) {
+  const source = await readFile(DISABLED_STUB_REGISTRY_FILE, "utf8");
+  const registryEntries = new Set();
+  for (const match of source.matchAll(/["']([^"']+\/[^"']+)["']\s*:/g)) {
+    registryEntries.add(match[1]);
+  }
+  const declaredEntries = new Set();
+  for (const surface of manifest.disabledPublicSurfaces) {
+    const key = disabledSurfaceKey(surface);
+    if (!key) {
+      throw new Error(`bundle profile ${PROFILE_NAME} has invalid disabledPublicSurfaces entry`);
+    }
+    declaredEntries.add(key);
+  }
+  const undeclared = [...registryEntries].filter((key) => !declaredEntries.has(key));
+  if (undeclared.length > 0) {
+    throw new Error(
+      `bundle profile ${PROFILE_NAME} is missing disabledPublicSurfaces entries for disabled stub surface(s): ${undeclared.join(", ")}`,
+    );
+  }
+}
+
+function createDisabledOptionalAliasMap(manifest) {
+  return Object.fromEntries(
+    Object.entries(manifest.disabledOptionalNativeModules).map(([moduleName, stubPath]) => {
+      if (typeof stubPath !== "string" || !stubPath) {
+        throw new Error(
+          `bundle profile ${PROFILE_NAME} has invalid disabled optional stub for ${moduleName}`,
+        );
+      }
+      return [moduleName, resolveRepoPath(stubPath)];
+    }),
+  );
+}
+
+function gitRevParse(ref) {
+  const result = spawnSync("git", ["rev-parse", ref], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+  const value = result.stdout.trim();
+  return value || null;
+}
+
+async function sha256File(filePath) {
+  const data = await readFile(filePath);
+  return createHash("sha256").update(data).digest("hex");
+}
+
+function resolveEsbuildLoader(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === ".ts" || ext === ".mts" || ext === ".cts") {
+    return "ts";
+  }
+  return "js";
+}
 
 const createRequireRewritePlugin = {
   name: "openclaw-createrequire-inline",
@@ -82,20 +221,179 @@ const createRequireRewritePlugin = {
           .join("");
         rewritten += `\n;(()=>{${stub}})();\n`;
       }
-      return rewritten === source ? null : { contents: rewritten, loader: "js" };
+      return rewritten === source
+        ? null
+        : { contents: rewritten, loader: resolveEsbuildLoader(args.path) };
     });
   },
 };
 
+function runTar(args, cwd) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("tar", args, { cwd, stdio: ["ignore", "inherit", "inherit"] });
+    child.on("error", reject);
+    child.on("exit", (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`tar exited with code ${code}`));
+      }
+    });
+  });
+}
+
+async function walkFiles(root) {
+  const files = [];
+  async function walk(dir) {
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await walk(fullPath);
+        continue;
+      }
+      if (entry.isFile()) {
+        files.push(fullPath);
+      }
+    }
+  }
+  await walk(root);
+  files.sort((left, right) => left.localeCompare(right));
+  return files;
+}
+
+async function collectPluginSdkSubpathsUsedByBundledExtensions() {
+  const subpaths = new Set();
+  for (const file of await walkFiles(DIST_EXTENSIONS_DIR)) {
+    if (!/\.(?:mjs|cjs|js)$/u.test(file)) {
+      continue;
+    }
+    const source = await readFile(file, "utf8");
+    for (const match of source.matchAll(PLUGIN_SDK_IMPORT_PATTERN)) {
+      const subpath = match[1] ?? match[2];
+      if (subpath) {
+        subpaths.add(subpath);
+      }
+    }
+  }
+  return [...subpaths].toSorted((left, right) => left.localeCompare(right));
+}
+
+function toIdentifierSuffix(value) {
+  return value.replace(/[^a-zA-Z0-9_$]/g, "_");
+}
+
+async function writeBundleEntryWrapper(subpaths) {
+  const wrapperDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-bundle-entry-"));
+  const wrapperPath = path.join(wrapperDir, "entry.mjs");
+  const lines = [
+    `import { loadOpenClawPlugins } from ${JSON.stringify(path.join(REPO_ROOT, "src", "plugins", "loader.ts"))};`,
+    "const __openclawBundlePluginSdkRegistry = {};",
+  ];
+  subpaths.forEach((subpath, index) => {
+    const ident = `sdk_${index}_${toIdentifierSuffix(subpath)}`;
+    const target = path.join(SRC_PLUGIN_SDK_DIR, `${subpath}.ts`);
+    lines.unshift(`import * as ${ident} from ${JSON.stringify(target)};`);
+    lines.push(`__openclawBundlePluginSdkRegistry[${JSON.stringify(subpath)}] = ${ident};`);
+  });
+  lines.push(
+    "globalThis.__OPENCLAW_BUNDLE_PLUGIN_SDK_REGISTRY__ = __openclawBundlePluginSdkRegistry;",
+    'if (process.env.OPENCLAW_BUNDLE_SMOKE === "1") {',
+    "  try {",
+    '    const registry = loadOpenClawPlugins({ mode: "validate", activate: false, cache: false, loadModules: true, throwOnLoadError: true });',
+    "    console.log(`[bundle-smoke] ${JSON.stringify({ ok: true, pluginCount: registry.plugins.length, errorCount: 0 })}`);",
+    "    process.exit(0);",
+    "  } catch (err) {",
+    "    const message = err instanceof Error ? err.message : String(err);",
+    "    console.log(`[bundle-smoke] ${JSON.stringify({ ok: false, error: message })}`);",
+    "    process.exit(1);",
+    "  }",
+    "}",
+    `await import(${JSON.stringify(DIST_ENTRY)});`,
+  );
+  await writeFile(wrapperPath, `${lines.join("\n")}\n`);
+  return { wrapperDir, wrapperPath };
+}
+
+async function writeOpenClawPackageSidecar(subpaths) {
+  const stagingRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-bundle-pkg-"));
+  const packageRoot = path.join(stagingRoot, "node_modules", "openclaw");
+  const pluginSdkRoot = path.join(packageRoot, "plugin-sdk");
+  await mkdir(pluginSdkRoot, { recursive: true });
+
+  const exportsField = {};
+  for (const subpath of subpaths) {
+    exportsField[`./plugin-sdk/${subpath}`] = `./plugin-sdk/${subpath}.cjs`;
+    const shimPath = path.join(pluginSdkRoot, `${subpath}.cjs`);
+    await mkdir(path.dirname(shimPath), { recursive: true });
+    await writeFile(
+      shimPath,
+      [
+        "'use strict';",
+        "const registry = globalThis.__OPENCLAW_BUNDLE_PLUGIN_SDK_REGISTRY__;",
+        `const mod = registry && registry[${JSON.stringify(subpath)}];`,
+        "if (!mod) {",
+        `  throw new Error(${JSON.stringify(`OpenClaw bundle SDK registry is missing plugin-sdk/${subpath}`)});`,
+        "}",
+        "module.exports = mod;",
+        "",
+      ].join("\n"),
+    );
+  }
+
+  await writeFile(
+    path.join(packageRoot, "package.json"),
+    JSON.stringify(
+      {
+        name: "openclaw",
+        type: "commonjs",
+        exports: exportsField,
+      },
+      null,
+      2,
+    ) + "\n",
+  );
+  await runTar(["-czhf", OPENCLAW_PKG_OUT_FILE, "node_modules/openclaw"], stagingRoot);
+  await rm(stagingRoot, { recursive: true, force: true });
+}
+
 const main = async () => {
   await mkdir(OUT_DIR, { recursive: true });
+  const manifest = await loadBundleProfile();
+  await assertDisabledPublicSurfaceManifest(manifest);
+  const runtimeDeps = manifest.externalRuntimeDeps;
+  const disabledOptionalAliases = createDisabledOptionalAliasMap(manifest);
 
   if (!(await stat(DIST_ENTRY).catch(() => null))) {
     throw new Error(`missing dist/entry.js — run pnpm build first`);
   }
+  if (!(await stat(DIST_EXTENSIONS_DIR).catch(() => null))) {
+    throw new Error(`missing dist/extensions — run pnpm build first`);
+  }
+
+  // Stamp the bundle with the package version so src/version.ts resolves the
+  // host version (it falls back to "0.0.0" otherwise, which makes plugins'
+  // engines.openclaw gating reject every plugin at runtime).
+  const pkg = JSON.parse(await readFile(path.join(REPO_ROOT, "package.json"), "utf8"));
+  const VERSION = pkg.version;
+  if (typeof VERSION !== "string" || VERSION.length === 0) {
+    throw new Error("package.json is missing a version field");
+  }
+  log(`stamping bundle as OpenClaw ${VERSION}`);
 
   const { build } = await import("esbuild");
-  log("bundling ESM via esbuild...");
+  log(`bundling ESM via esbuild for ${manifest.profile}...`);
+  const pluginSdkSubpaths = await collectPluginSdkSubpathsUsedByBundledExtensions();
+  if (pluginSdkSubpaths.length === 0) {
+    throw new Error("no openclaw/plugin-sdk imports found in dist/extensions");
+  }
+  log(`registering ${pluginSdkSubpaths.length} plugin-sdk subpaths for bundled extensions`);
+  const { wrapperDir, wrapperPath } = await writeBundleEntryWrapper(pluginSdkSubpaths);
 
   // Banner: inject createRequire so CJS modules that call require("tty")
   // etc. still work inside the ESM bundle.
@@ -104,38 +402,99 @@ const main = async () => {
     "const require = __openclaw_createRequire(import.meta.url);",
   ].join("\n");
 
-  const result = await build({
-    entryPoints: [DIST_ENTRY],
-    outfile: OUT_FILE,
-    bundle: true,
-    platform: "node",
-    target: "node22",
-    format: "esm",
-    packages: "bundle",
-    mainFields: ["module", "main"],
-    resolveExtensions: [".js", ".mjs", ".cjs", ".json"],
-    minifySyntax: true,
-    minifyWhitespace: true,
-    keepNames: true,
-    legalComments: "none",
-    metafile: true,
-    logLevel: "warning",
-    banner: { js: banner },
-    alias: {
-      sharp: STUB,
-      keytar: STUB,
-      "@reflink/reflink": STUB,
-      "@napi-rs/canvas": STUB,
-    },
-    external: ["fsevents", "@img/sharp-*", "@node-llama-cpp/*", "node-llama-cpp"],
-    plugins: [createRequireRewritePlugin],
-  });
+  let result;
+  try {
+    result = await build({
+      entryPoints: [wrapperPath],
+      outfile: OUT_FILE,
+      bundle: true,
+      platform: "node",
+      target: "node22",
+      format: "esm",
+      packages: "bundle",
+      mainFields: ["module", "main"],
+      resolveExtensions: [".js", ".mjs", ".cjs", ".json"],
+      minifySyntax: true,
+      minifyWhitespace: true,
+      keepNames: true,
+      legalComments: "none",
+      metafile: true,
+      logLevel: "warning",
+      banner: { js: banner },
+      define: {
+        __OPENCLAW_VERSION__: JSON.stringify(VERSION),
+      },
+      alias: disabledOptionalAliases,
+      external: ["fsevents", "@img/sharp-*", "@node-llama-cpp/*", "node-llama-cpp", ...runtimeDeps],
+      plugins: [createRequireRewritePlugin],
+    });
+  } finally {
+    await rm(wrapperDir, { recursive: true, force: true });
+  }
 
   await writeFile(path.join(OUT_DIR, "meta.json"), JSON.stringify(result.metafile, null, 2));
 
   const outStat = await stat(OUT_FILE);
   log(`\nbundle: ${path.relative(REPO_ROOT, OUT_FILE)}`);
   log(`  size: ${(outStat.size / (1024 * 1024)).toFixed(2)} MB`);
+
+  // Pack node_modules/<dep> for each external runtime dep so the consumer
+  // can extract them next to openclaw.bundle.mjs and let createRequire
+  // resolve them.
+  for (const dep of runtimeDeps) {
+    const depPath = path.join(REPO_ROOT, "node_modules", dep);
+    if (!(await stat(depPath).catch(() => null))) {
+      throw new Error(`missing node_modules/${dep} — run pnpm install before building the bundle`);
+    }
+  }
+  const tarPaths = runtimeDeps.map((dep) => `node_modules/${dep}`);
+  await runTar(["-czhf", DEPS_OUT_FILE, ...tarPaths], REPO_ROOT);
+  const depsStat = await stat(DEPS_OUT_FILE);
+  log(`\ndeps:   ${path.relative(REPO_ROOT, DEPS_OUT_FILE)}`);
+  log(`  size: ${(depsStat.size / (1024 * 1024)).toFixed(2)} MB`);
+  log(`  contains: ${runtimeDeps.join(", ")}`);
+
+  await writeOpenClawPackageSidecar(pluginSdkSubpaths);
+  const openclawPkgStat = await stat(OPENCLAW_PKG_OUT_FILE);
+  log(`\nopenclaw pkg: ${path.relative(REPO_ROOT, OPENCLAW_PKG_OUT_FILE)}`);
+  log(`  size: ${(openclawPkgStat.size / (1024 * 1024)).toFixed(2)} MB`);
+  log(`  plugin-sdk shims: ${pluginSdkSubpaths.length}`);
+
+  await writeFile(
+    path.join(OUT_DIR, "bundle-contract.json"),
+    JSON.stringify(
+      {
+        profile: manifest.profile,
+        packageVersion: VERSION,
+        pluginSdkSubpaths,
+        disabledPublicSurfaces: manifest.disabledPublicSurfaces,
+        externalRuntimeDeps: runtimeDeps,
+        disabledOptionalNativeModules: manifest.disabledOptionalNativeModules,
+        outputs: {
+          bundle: { path: "openclaw.bundle.mjs", bytes: outStat.size },
+          depsTar: { path: "bundle-deps.tar.gz", bytes: depsStat.size },
+          openclawTar: { path: "bundle-openclaw-pkg.tar.gz", bytes: openclawPkgStat.size },
+        },
+      },
+      null,
+      2,
+    ) + "\n",
+  );
+
+  await writeFile(
+    path.join(OUT_DIR, "release.json"),
+    JSON.stringify(
+      {
+        profile: manifest.profile,
+        upstreamSha: gitRevParse("upstream/main"),
+        forkSha: gitRevParse("HEAD"),
+        bundleSha256: await sha256File(OUT_FILE),
+        builtAt: new Date().toISOString(),
+      },
+      null,
+      2,
+    ) + "\n",
+  );
   log("done.");
 };
 
