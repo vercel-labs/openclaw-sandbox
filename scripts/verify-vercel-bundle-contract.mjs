@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { spawn } from "node:child_process";
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
@@ -15,9 +16,18 @@ const REQUIRED_FILES = [
   "openclaw.bundle.mjs",
   "bundle-deps.tar.gz",
   "bundle-openclaw-pkg.tar.gz",
+  "openclaw-release.tar.gz",
   "meta.json",
   "release.json",
   "bundle-contract.json",
+];
+
+const RELEASE_TAR_ENTRIES = [
+  "bundle-contract.json",
+  "bundle-deps.tar.gz",
+  "bundle-openclaw-pkg.tar.gz",
+  "openclaw.bundle.mjs",
+  "release.json",
 ];
 
 async function readJson(filePath) {
@@ -39,12 +49,50 @@ async function fileSize(fileName) {
   return info.size;
 }
 
+function listTarEntries(fileName) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("tar", ["-tzf", fileName], {
+      cwd: OUT_DIR,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.on("error", reject);
+    child.on("exit", (code, signal) => {
+      if (code === 0) {
+        resolve(stdout.trim().split(/\r?\n/u).filter(Boolean));
+        return;
+      }
+      reject(new Error(`tar -tzf ${fileName} exited with code ${code ?? signal}: ${stderr}`));
+    });
+  });
+}
+
 function assertBudget(bytes, maxBytes, label) {
   if (typeof maxBytes !== "number" || !Number.isFinite(maxBytes)) {
     fail(`invalid budget for ${label}`);
   }
   if (bytes > maxBytes) {
     fail(`${label} exceeds budget: ${bytes} > ${maxBytes}`);
+  }
+}
+
+function assertOutputSize(contract, outputKey, fileName, bytes) {
+  const output = contract.outputs?.[outputKey];
+  if (!output || typeof output !== "object") {
+    fail(`bundle-contract.json lacks outputs.${outputKey}`);
+  }
+  if (output.path !== fileName) {
+    fail(`bundle-contract.json outputs.${outputKey}.path mismatch: ${output.path} !== ${fileName}`);
+  }
+  if (output.bytes !== bytes) {
+    fail(`bundle-contract.json outputs.${outputKey}.bytes mismatch: ${output.bytes} !== ${bytes}`);
   }
 }
 
@@ -87,6 +135,20 @@ async function main() {
     budgets.openclawPackageTarMaxBytes,
     "bundle-openclaw-pkg.tar.gz",
   );
+  assertBudget(
+    sizes["openclaw-release.tar.gz"],
+    budgets.releaseTarMaxBytes,
+    "openclaw-release.tar.gz",
+  );
+
+  const releaseTarEntries = (await listTarEntries("openclaw-release.tar.gz")).toSorted(
+    (left, right) => left.localeCompare(right),
+  );
+  if (JSON.stringify(releaseTarEntries) !== JSON.stringify(RELEASE_TAR_ENTRIES)) {
+    fail(
+      `openclaw-release.tar.gz entries mismatch: expected ${RELEASE_TAR_ENTRIES.join(", ")}; got ${releaseTarEntries.join(", ")}`,
+    );
+  }
 
   const meta = await readJson(path.join(OUT_DIR, "meta.json"));
   const inputs = Object.keys(meta.inputs ?? {});
@@ -108,6 +170,20 @@ async function main() {
   if (!Array.isArray(contract.pluginSdkSubpaths) || contract.pluginSdkSubpaths.length === 0) {
     fail("bundle-contract.json pluginSdkSubpaths is empty");
   }
+  assertOutputSize(contract, "bundle", "openclaw.bundle.mjs", sizes["openclaw.bundle.mjs"]);
+  assertOutputSize(contract, "depsTar", "bundle-deps.tar.gz", sizes["bundle-deps.tar.gz"]);
+  assertOutputSize(
+    contract,
+    "openclawTar",
+    "bundle-openclaw-pkg.tar.gz",
+    sizes["bundle-openclaw-pkg.tar.gz"],
+  );
+  assertOutputSize(
+    contract,
+    "releaseTar",
+    "openclaw-release.tar.gz",
+    sizes["openclaw-release.tar.gz"],
+  );
 
   const release = await readJson(path.join(OUT_DIR, "release.json"));
   if (typeof release.forkSha !== "string" || release.forkSha.length === 0) {
@@ -124,6 +200,7 @@ async function main() {
       bundleBytes: sizes["openclaw.bundle.mjs"],
       depsTarBytes: sizes["bundle-deps.tar.gz"],
       pkgTarBytes: sizes["bundle-openclaw-pkg.tar.gz"],
+      releaseTarBytes: sizes["openclaw-release.tar.gz"],
       pluginSdkSubpathCount: contract.pluginSdkSubpaths.length,
       disabledPublicSurfaceCount: Array.isArray(contract.disabledPublicSurfaces)
         ? contract.disabledPublicSurfaces.length

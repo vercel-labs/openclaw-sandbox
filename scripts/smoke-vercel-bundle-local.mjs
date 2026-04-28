@@ -11,13 +11,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "..");
 const OUT_DIR = path.join(REPO_ROOT, "dist-vercel-runtime", "moonshot");
 const WALL_CLOCK_MS = 60_000;
-const RELEASE_FILES = [
-  "openclaw.bundle.mjs",
-  "bundle-deps.tar.gz",
-  "bundle-openclaw-pkg.tar.gz",
-  "release.json",
-  "bundle-contract.json",
-];
+const RELEASE_TAR_FILE = "openclaw-release.tar.gz";
 const FORBIDDEN_OUTPUT = [
   "Unable to resolve bundled plugin public surface",
   "Cannot find module",
@@ -119,10 +113,9 @@ async function main() {
   try {
     const homeDir = path.join(tmpRoot, "home");
     await mkdir(homeDir, { recursive: true });
-    for (const file of RELEASE_FILES) {
-      await copyFile(path.join(OUT_DIR, file), path.join(tmpRoot, file));
-    }
+    await copyFile(path.join(OUT_DIR, RELEASE_TAR_FILE), path.join(tmpRoot, RELEASE_TAR_FILE));
 
+    await extractTarball(RELEASE_TAR_FILE, tmpRoot);
     await extractTarball("bundle-deps.tar.gz", tmpRoot);
     await extractTarball("bundle-openclaw-pkg.tar.gz", tmpRoot);
 

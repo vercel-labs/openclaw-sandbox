@@ -23,6 +23,14 @@ const OUT_DIR = path.join(REPO_ROOT, "dist-vercel-runtime", "moonshot");
 const OUT_FILE = path.join(OUT_DIR, "openclaw.bundle.mjs");
 const DEPS_OUT_FILE = path.join(OUT_DIR, "bundle-deps.tar.gz");
 const OPENCLAW_PKG_OUT_FILE = path.join(OUT_DIR, "bundle-openclaw-pkg.tar.gz");
+const RELEASE_TAR_OUT_FILE = path.join(OUT_DIR, "openclaw-release.tar.gz");
+const RELEASE_TAR_FILES = [
+  "openclaw.bundle.mjs",
+  "bundle-deps.tar.gz",
+  "bundle-openclaw-pkg.tar.gz",
+  "release.json",
+  "bundle-contract.json",
+];
 const DIST_EXTENSIONS_DIR = path.join(REPO_ROOT, "dist", "extensions");
 const SRC_PLUGIN_SDK_DIR = path.join(REPO_ROOT, "src", "plugin-sdk");
 const DISABLED_STUB_REGISTRY_FILE = path.join(SRC_PLUGIN_SDK_DIR, "disabled-stubs", "registry.ts");
@@ -230,7 +238,11 @@ const createRequireRewritePlugin = {
 
 function runTar(args, cwd) {
   return new Promise((resolve, reject) => {
-    const child = spawn("tar", args, { cwd, stdio: ["ignore", "inherit", "inherit"] });
+    const child = spawn("tar", args, {
+      cwd,
+      env: { ...process.env, COPYFILE_DISABLE: "1" },
+      stdio: ["ignore", "inherit", "inherit"],
+    });
     child.on("error", reject);
     child.on("exit", (code) => {
       if (code === 0) {
@@ -240,6 +252,19 @@ function runTar(args, cwd) {
       }
     });
   });
+}
+
+function listTar(args, cwd) {
+  const result = spawnSync("tar", args, {
+    cwd,
+    encoding: "utf8",
+    env: { ...process.env, COPYFILE_DISABLE: "1" },
+    stdio: ["ignore", "pipe", "inherit"],
+  });
+  if (result.status !== 0) {
+    throw new Error(`tar ${args.join(" ")} exited with code ${result.status ?? result.signal}`);
+  }
+  return result.stdout.trim().split(/\r?\n/u).filter(Boolean);
 }
 
 async function walkFiles(root) {
@@ -362,6 +387,41 @@ async function writeOpenClawPackageSidecar(subpaths) {
   await rm(stagingRoot, { recursive: true, force: true });
 }
 
+async function writeBundleContract({
+  manifest,
+  version,
+  pluginSdkSubpaths,
+  runtimeDeps,
+  outputSizes,
+}) {
+  await writeFile(
+    path.join(OUT_DIR, "bundle-contract.json"),
+    JSON.stringify(
+      {
+        profile: manifest.profile,
+        packageVersion: version,
+        pluginSdkSubpaths,
+        disabledPublicSurfaces: manifest.disabledPublicSurfaces,
+        externalRuntimeDeps: runtimeDeps,
+        disabledOptionalNativeModules: manifest.disabledOptionalNativeModules,
+        outputs: {
+          bundle: { path: "openclaw.bundle.mjs", bytes: outputSizes.bundle },
+          depsTar: { path: "bundle-deps.tar.gz", bytes: outputSizes.depsTar },
+          openclawTar: { path: "bundle-openclaw-pkg.tar.gz", bytes: outputSizes.openclawTar },
+          releaseTar: { path: "openclaw-release.tar.gz", bytes: outputSizes.releaseTar },
+        },
+      },
+      null,
+      2,
+    ) + "\n",
+  );
+}
+
+async function createReleaseTarball() {
+  await runTar(["-czf", RELEASE_TAR_OUT_FILE, ...RELEASE_TAR_FILES], OUT_DIR);
+  return stat(RELEASE_TAR_OUT_FILE);
+}
+
 const main = async () => {
   await mkdir(OUT_DIR, { recursive: true });
   const manifest = await loadBundleProfile();
@@ -461,27 +521,6 @@ const main = async () => {
   log(`  plugin-sdk shims: ${pluginSdkSubpaths.length}`);
 
   await writeFile(
-    path.join(OUT_DIR, "bundle-contract.json"),
-    JSON.stringify(
-      {
-        profile: manifest.profile,
-        packageVersion: VERSION,
-        pluginSdkSubpaths,
-        disabledPublicSurfaces: manifest.disabledPublicSurfaces,
-        externalRuntimeDeps: runtimeDeps,
-        disabledOptionalNativeModules: manifest.disabledOptionalNativeModules,
-        outputs: {
-          bundle: { path: "openclaw.bundle.mjs", bytes: outStat.size },
-          depsTar: { path: "bundle-deps.tar.gz", bytes: depsStat.size },
-          openclawTar: { path: "bundle-openclaw-pkg.tar.gz", bytes: openclawPkgStat.size },
-        },
-      },
-      null,
-      2,
-    ) + "\n",
-  );
-
-  await writeFile(
     path.join(OUT_DIR, "release.json"),
     JSON.stringify(
       {
@@ -495,6 +534,35 @@ const main = async () => {
       2,
     ) + "\n",
   );
+
+  let releaseTarSize = 0;
+  let releaseTarStat;
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    await writeBundleContract({
+      manifest,
+      version: VERSION,
+      pluginSdkSubpaths,
+      runtimeDeps,
+      outputSizes: {
+        bundle: outStat.size,
+        depsTar: depsStat.size,
+        openclawTar: openclawPkgStat.size,
+        releaseTar: releaseTarSize,
+      },
+    });
+    releaseTarStat = await createReleaseTarball();
+    if (releaseTarStat.size === releaseTarSize) {
+      break;
+    }
+    releaseTarSize = releaseTarStat.size;
+  }
+  if (!releaseTarStat || releaseTarStat.size !== releaseTarSize) {
+    throw new Error("release tarball size did not stabilize while writing bundle-contract.json");
+  }
+  const tarEntries = listTar(["-tzf", RELEASE_TAR_OUT_FILE], OUT_DIR);
+  log(`\nrelease: openclaw-release.tar.gz`);
+  log(`  size: ${(releaseTarStat.size / (1024 * 1024)).toFixed(2)} MB`);
+  log(`  contains: ${tarEntries.join(", ")}`);
   log("done.");
 };
 

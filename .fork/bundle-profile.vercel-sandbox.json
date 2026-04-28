@@ -18,6 +18,7 @@
     "bundleMaxBytes": 41943040,
     "bundleWarnBytes": 31457280,
     "runtimeDepsTarMaxBytes": 12582912,
-    "openclawPackageTarMaxBytes": 1048576
+    "openclawPackageTarMaxBytes": 1048576,
+    "releaseTarMaxBytes": 47185920
   }
 }

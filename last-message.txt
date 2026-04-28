@@ -1,40 +1,41 @@
-T1 report: Manifest-driven Vercel Sandbox bundle contract + local smoke
+T2 final report
 
 Files added:
-- .fork/bundle-profile.vercel-sandbox.json
-- scripts/verify-vercel-bundle-contract.mjs
-- scripts/smoke-vercel-bundle-local.mjs
-- last-message.txt
+- Publish script: scripts/publish-vercel-blob.mjs
 
 Files modified:
-- scripts/build-bundle-esm.mjs
-- package.json
+- Build/profile contract: scripts/build-bundle-esm.mjs, .fork/bundle-profile.vercel-sandbox.json
+- Verifier and smoke: scripts/verify-vercel-bundle-contract.mjs, scripts/smoke-vercel-bundle-local.mjs
+- Package metadata: package.json, pnpm-lock.yaml
+- Notes: .notes/bundle-recommendations-fork.md was updated locally, but .notes/ is ignored by /Users/johnlindquist/.gitignore in this checkout and could not be included through the repo pre-commit hook.
 
-Commands run:
-- node --check scripts/build-bundle-esm.mjs: PASS
-- node --check scripts/verify-vercel-bundle-contract.mjs: PASS
-- node --check scripts/smoke-vercel-bundle-local.mjs: PASS
-- pnpm exec oxfmt --check scripts/build-bundle-esm.mjs scripts/verify-vercel-bundle-contract.mjs scripts/smoke-vercel-bundle-local.mjs package.json .fork/bundle-profile.vercel-sandbox.json: PASS
-- pnpm exec oxlint scripts/build-bundle-esm.mjs scripts/verify-vercel-bundle-contract.mjs scripts/smoke-vercel-bundle-local.mjs: PASS
-- pnpm exec oxlint --type-aware --tsconfig tsconfig.oxlint.json --report-unused-disable-directives-severity error scripts/build-bundle-esm.mjs scripts/verify-vercel-bundle-contract.mjs scripts/smoke-vercel-bundle-local.mjs: PASS
-- pnpm tsgo: PASS
-- pnpm check: FAIL in pnpm lint. oxlint-tsgolint exits with SIGPIPE under Node v24.13.0. Retried with fnm exec --using 22 pnpm check and OPENCLAW_LOCAL_CHECK_MODE=throttled fnm exec --using 22 pnpm check; both failed the same way at node_modules/oxlint-tsgolint/bin/tsgolint.js with signal SIGPIPE before any source diagnostic. Targeted type-aware oxlint on the touched scripts passes.
-- pnpm build: PASS
-- pnpm build:vercel-sandbox-bundle: PASS
-- pnpm verify:vercel-sandbox-bundle: PASS with warning: openclaw.bundle.mjs exceeds warning budget: 32828205 > 31457280. It remains below the hard 41943040-byte budget.
-- pnpm smoke:vercel-sandbox-bundle:local: PASS. Final output: {"ok":true,"elapsedMs":578,"bundleSmoke":{"ok":true,"pluginCount":0,"errorCount":0},"pluginLoadProfileCount":0}
+Verification:
+- pnpm tsgo: PASS.
+- pnpm build: PASS. Key output: build-all completed canvas:a2ui bundle check, tsdown, runtime-postbuild, plugin-sdk dts, plugin-sdk export check, metadata copies, build info, and CLI compatibility writes.
+- pnpm build:vercel-sandbox-bundle: PASS. Bundle 32,828,300 bytes; deps tar 1,507,454 bytes; openclaw package tar 13,098 bytes; release tar 8,872,125 bytes; plugin-sdk subpaths 170.
+- pnpm verify:vercel-sandbox-bundle: PASS. Warning only: openclaw.bundle.mjs exceeds warning budget 32,828,300 > 31,457,280. JSON: {"ok":true,"profile":"vercel-sandbox","bundleBytes":32828300,"depsTarBytes":1507454,"pkgTarBytes":13098,"releaseTarBytes":8872125,"pluginSdkSubpathCount":170,"disabledPublicSurfaceCount":1}.
+- pnpm smoke:vercel-sandbox-bundle:local: PASS. Elapsed 557 ms. Parsed bundle smoke JSON: {"ok":true,"pluginCount":0,"errorCount":0}. plugin-load-profile line count: 0.
+- Targeted format: PASS via pnpm format on touched files. pnpm check intentionally skipped per task because oxlint-tsgolint SIGPIPE is known pre-existing tooling debt.
+- Empty-token publish dry run: PASS expected failure. Exit code 1. Error: publish-vercel-blob: missing BLOB_READ_WRITE_TOKEN env var; token status: missing. Set it before publishing.
 
-Build-fail-fast experiment:
-- Temporarily changed .fork/bundle-profile.vercel-sandbox.json disabledPublicSurfaces to an empty array.
-- pnpm build:vercel-sandbox-bundle failed as expected with: bundle profile vercel-sandbox is missing disabledPublicSurfaces entries for disabled stub surface(s): speech-core/runtime-api.js
-- Restored the speech-core disabledPublicSurfaces entry, then pnpm build:vercel-sandbox-bundle and pnpm verify:vercel-sandbox-bundle passed again.
+Tarball entry list:
+openclaw.bundle.mjs
+bundle-deps.tar.gz
+bundle-openclaw-pkg.tar.gz
+release.json
+bundle-contract.json
 
-Deviations from the spec:
-- I did not touch src/plugin-sdk/facade-loader.ts or src/plugins/public-surface-loader.ts.
-- I did not change the disabled-stub registry shape.
-- release.json currently contains profile, upstreamSha, forkSha, bundleSha256, and builtAt, matching the task spec. The broader plan's section 3 also mentions bundleContractSha256 and Node major; those were not requested in T1 and are not added here.
-- The local smoke does not see [plugin-load-profile] lines because the smoke loader run returns an empty plugin registry in the clean temp/no-install environment; the script reports pluginLoadProfileCount: 0 instead of failing on that count because T1 only required counting those lines.
+Artifact details:
+- bundleSha256: 156ad832ad843125e64c46a318a3881b4350259f17e34efecc0ec750461f6403
+- bundleSha7: 156ad83
+- releaseTarBytes in bundle-contract.json matches the actual tarball size: 8,872,125.
 
 Notes for .notes/bundle-recommendations-fork.md:
-- The local smoke should clarify whether pluginLoadProfileCount is expected to be nonzero. In this implementation, the no-install temp smoke succeeds with pluginCount: 0 and pluginLoadProfileCount: 0.
-- The plan's section 3 release metadata mentions bundleContractSha256 and Node major, while the T1 task spec omits them. The plan should explicitly say whether T1 intentionally defers those fields.
+- Added the requested three-sentence Release artifact subsection.
+- Additional discovered implementation detail: macOS bsdtar can include Apple copyfile metadata unless COPYFILE_DISABLE=1 is set. The build now sets COPYFILE_DISABLE=1 for tar creation/listing so the release tarball has stable flat entries and the self-reported release tar size can converge.
+
+Skipped:
+- No Vercel Blob upload was performed; only the missing-token dry run was executed, as requested.
+- No vclaw changes were made.
+- No unrelated WIP files were edited or reverted.
+- The .notes/bundle-recommendations-fork.md change was not committed because the path is globally ignored and the repo pre-commit hook restages without -f.
