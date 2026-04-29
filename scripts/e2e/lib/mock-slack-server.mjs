@@ -82,6 +82,11 @@ const RESPONSES = {
     channel: body.channel,
     ts: body.ts ?? `${Math.floor(Date.now() / 1000)}.0002`,
   }),
+  "chat.delete": (_ctx, body) => ({
+    ok: true,
+    channel: body.channel,
+    ts: body.ts,
+  }),
   "reactions.add": () => ({ ok: true }),
   "reactions.remove": () => ({ ok: true }),
   "files.upload": () => ({

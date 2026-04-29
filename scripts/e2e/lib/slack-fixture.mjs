@@ -22,6 +22,7 @@ export function buildAppMentionPayload({
   channelId = DEFAULT_CHANNEL_ID,
   text = "<@U0E2ETESTBOT> hello from e2e",
   ts,
+  threadTs,
 } = {}) {
   const eventTs = ts ?? `${Math.floor(Date.now() / 1000)}.000100`;
   return {
@@ -36,6 +37,7 @@ export function buildAppMentionPayload({
       channel: channelId,
       event_ts: eventTs,
       team: teamId,
+      ...(threadTs ? { thread_ts: threadTs } : {}),
     },
     type: "event_callback",
     event_id: `Ev${eventTs.replace(".", "")}`,
@@ -45,6 +47,45 @@ export function buildAppMentionPayload({
         enterprise_id: null,
         team_id: teamId,
         user_id: botId,
+        is_bot: true,
+        is_enterprise_install: false,
+      },
+    ],
+  };
+}
+
+export function buildBotMessagePayload({
+  teamId = DEFAULT_TEAM_ID,
+  channelId = DEFAULT_CHANNEL_ID,
+  botId = "B0E2ETEST",
+  botUserId = DEFAULT_BOT_ID,
+  text = "bot reply",
+  ts,
+  threadTs,
+} = {}) {
+  const eventTs = ts ?? `${Math.floor(Date.now() / 1000)}.000200`;
+  return {
+    token: "verification-token-unused",
+    team_id: teamId,
+    api_app_id: "A0E2ETEST",
+    type: "event_callback",
+    event_id: `EvBot${eventTs.replace(".", "")}`,
+    event_time: Math.floor(Number(eventTs)),
+    event: {
+      type: "message",
+      bot_id: botId,
+      user: botUserId,
+      text,
+      channel: channelId,
+      ts: eventTs,
+      event_ts: eventTs,
+      ...(threadTs ? { thread_ts: threadTs } : {}),
+    },
+    authorizations: [
+      {
+        enterprise_id: null,
+        team_id: teamId,
+        user_id: botUserId,
         is_bot: true,
         is_enterprise_install: false,
       },
