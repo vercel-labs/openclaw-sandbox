@@ -204,7 +204,7 @@ function asMessages(val: unknown): OpenAiChatMessage[] {
   return Array.isArray(val) ? (val as OpenAiChatMessage[]) : [];
 }
 
-// Launch-verify probe: vercel-openclaw's deploy verifier needs a deterministic
+// Launch-verify probe: sandbox deploy verifiers need a deterministic
 // reply through the same /v1/chat/completions surface that real chat traffic
 // uses. The verifier sets a private header *and* a fixed prompt; both must
 // match to bypass agent execution. Header is mandatory so this branch cannot

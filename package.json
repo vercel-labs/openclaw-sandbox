@@ -1222,8 +1222,8 @@
     "build:ci-artifacts": "node scripts/build-all.mjs ciArtifacts",
     "build:docker": "node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && node --import tsx scripts/write-npm-update-compat-sidecars.ts && node scripts/build-stamp.mjs && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/copy-export-html-templates.ts && node --import tsx scripts/write-build-info.ts && node --experimental-strip-types scripts/write-cli-startup-metadata.ts && node --import tsx scripts/write-cli-compat.ts",
     "build:plugin-sdk:dts": "tsc -p tsconfig.plugin-sdk.dts.json",
+    "build:sandbox-bundle": "node scripts/build-bundle-esm.mjs",
     "build:strict-smoke": "pnpm canvas:a2ui:bundle && node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && node scripts/build-stamp.mjs && pnpm build:plugin-sdk:dts && node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node scripts/check-plugin-sdk-exports.mjs",
-    "build:vercel-sandbox-bundle": "node scripts/build-bundle-esm.mjs",
     "canon:check": "node scripts/canon.mjs check",
     "canon:check:json": "node scripts/canon.mjs check --json",
     "canon:enforce": "node scripts/canon.mjs enforce --json",
@@ -1345,7 +1345,7 @@
     "proxy:install-ca": "node --import tsx scripts/proxy-install-ca.mjs",
     "proxy:run": "node scripts/run-node.mjs proxy run",
     "proxy:start": "node scripts/run-node.mjs proxy start",
-    "publish:vercel-sandbox-bundle": "node scripts/publish-vercel-blob.mjs",
+    "publish:sandbox-bundle:vercel": "node scripts/publish-vercel-blob.mjs",
     "qa:e2e": "node --import tsx scripts/qa-e2e.ts",
     "qa:lab:build": "vite build --config extensions/qa-lab/web/vite.config.ts",
     "qa:lab:ui": "pnpm openclaw qa ui",
@@ -1361,7 +1361,7 @@
     "release:plugins:npm:plan": "node --import tsx scripts/plugin-npm-release-plan.ts",
     "runtime-sidecars:check": "node --import tsx scripts/generate-runtime-sidecar-paths-baseline.ts --check",
     "runtime-sidecars:gen": "node --import tsx scripts/generate-runtime-sidecar-paths-baseline.ts --write",
-    "smoke:vercel-sandbox-bundle:local": "node scripts/smoke-vercel-bundle-local.mjs",
+    "smoke:sandbox-bundle:local": "node scripts/smoke-sandbox-bundle-local.mjs",
     "stage:bundled-plugin-runtime-deps": "node scripts/stage-bundled-plugin-runtime-deps.mjs",
     "start": "node scripts/run-node.mjs",
     "test": "node scripts/test-projects.mjs",
@@ -1473,7 +1473,7 @@
     "ui:i18n:check": "node --import tsx scripts/control-ui-i18n.ts check",
     "ui:i18n:sync": "node --import tsx scripts/control-ui-i18n.ts sync --write",
     "ui:install": "node scripts/ui.js install",
-    "verify:vercel-sandbox-bundle": "node scripts/verify-vercel-bundle-contract.mjs"
+    "verify:sandbox-bundle": "node scripts/verify-sandbox-bundle-contract.mjs"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "0.18.2",

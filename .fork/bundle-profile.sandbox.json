@@ -1,5 +1,5 @@
 {
-  "profile": "vercel-sandbox",
+  "profile": "sandbox",
   "disabledOptionalNativeModules": {
     "sharp": "build/stubs/disabled-optional.cjs",
     "keytar": "build/stubs/disabled-optional.cjs",
@@ -11,7 +11,7 @@
     {
       "dirName": "speech-core",
       "artifactBasename": "runtime-api.js",
-      "reason": "TTS disabled in the single-file Vercel Sandbox bundle"
+      "reason": "TTS disabled in the single-file sandbox bundle"
     }
   ],
   "budgets": {

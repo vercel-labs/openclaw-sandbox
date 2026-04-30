@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Channels archive builder for the Vercel Sandbox bundle deployment.
+ * Channels archive builder for the sandbox bundle deployment.
  *
  * The single-file ESM bundle (build-bundle-esm.mjs) ships the gateway core
  * but no plugins — esbuild only traces static imports from dist/entry.js,
@@ -10,7 +10,7 @@
  *
  * This script tars up the runtime-staged channel extension tree (with
  * symlinks dereferenced so node_modules ships its real contents) into
- * channels.tar.gz. vercel-openclaw's bootstrap downloads + extracts this
+ * channels.tar.gz. The sandbox bootstrap downloads + extracts this
  * next to the bundle, then sets OPENCLAW_BUNDLED_PLUGINS_DIR so the bundle's
  * plugin discovery code finds each plugin's package.json on disk.
  *
@@ -34,7 +34,7 @@ const REPO_ROOT = path.resolve(HERE, "..");
 // dist/extensions/ holds the real compiled output plus the dependency
 // node_modules tree (deduped under each extension via symlink).
 const SRC_DIR = path.join(REPO_ROOT, "dist", "extensions");
-const OUT_DIR = path.join(REPO_ROOT, "dist-vercel-runtime", "moonshot");
+const OUT_DIR = path.join(REPO_ROOT, "dist", "sandbox");
 const OUT_FILE = path.join(OUT_DIR, "channels.tar.gz");
 const CHUNKS_OUT_FILE = path.join(OUT_DIR, "channel-shared-chunks.tar.gz");
 

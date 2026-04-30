@@ -8,9 +8,9 @@ import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "..");
-const PROFILE_NAME = process.env.OPENCLAW_BUNDLE_PROFILE ?? "vercel-sandbox";
+const PROFILE_NAME = process.env.OPENCLAW_BUNDLE_PROFILE ?? "sandbox";
 const PROFILE_PATH = path.join(REPO_ROOT, ".fork", `bundle-profile.${PROFILE_NAME}.json`);
-const OUT_DIR = path.join(REPO_ROOT, "dist-vercel-runtime", "moonshot");
+const OUT_DIR = path.join(REPO_ROOT, "dist", "sandbox");
 
 const REQUIRED_FILES = [
   "openclaw.bundle.mjs",
@@ -233,6 +233,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  process.stderr.write(`verify-vercel-bundle-contract: ${err?.stack || err}\n`);
+  process.stderr.write(`verify-sandbox-bundle-contract: ${err?.stack || err}\n`);
   process.exit(1);
 });

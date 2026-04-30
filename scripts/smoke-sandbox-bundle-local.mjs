@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "..");
-const OUT_DIR = path.join(REPO_ROOT, "dist-vercel-runtime", "moonshot");
+const OUT_DIR = path.join(REPO_ROOT, "dist", "sandbox");
 const WALL_CLOCK_MS = 60_000;
 const RELEASE_TAR_FILE = "openclaw-release.tar.gz";
 const FORBIDDEN_OUTPUT = [
@@ -21,7 +21,7 @@ const FORBIDDEN_OUTPUT = [
   "yarn install",
   "corepack",
   // Node 22 ESM/CJS dual-load — what slack hits when jiti is imported both
-  // ways. The build-side static-import guard in verify-vercel-bundle-contract
+  // ways. The build-side static-import guard in verify-sandbox-bundle-contract
   // should already prevent this; keep the runtime check as defense in depth.
   "imported again after being required",
   "Status = 0",
@@ -74,7 +74,7 @@ function runBundle(cwd, homeDir) {
         HOME: homeDir,
         PATH: process.env.PATH ?? "",
         NODE_ENV: "production",
-        OPENCLAW_BUNDLE_PROFILE: "vercel-sandbox",
+        OPENCLAW_BUNDLE_PROFILE: "sandbox",
         OPENCLAW_BUNDLE_SMOKE: "1",
         OPENCLAW_PLUGIN_LOAD_PROFILE: "1",
       },
@@ -114,7 +114,7 @@ function runBundle(cwd, homeDir) {
 }
 
 async function main() {
-  const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-vercel-bundle-smoke-"));
+  const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-bundle-smoke-"));
   try {
     const homeDir = path.join(tmpRoot, "home");
     await mkdir(homeDir, { recursive: true });
@@ -157,6 +157,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  process.stderr.write(`smoke-vercel-bundle-local: ${err?.stack || err}\n`);
+  process.stderr.write(`smoke-sandbox-bundle-local: ${err?.stack || err}\n`);
   process.exit(1);
 });

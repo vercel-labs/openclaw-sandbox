@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * One-shot ESM bundle builder for openclaw.
- * Produces dist-vercel-runtime/moonshot/openclaw.bundle.mjs
+ * Produces dist/sandbox/openclaw.bundle.mjs
  *
  * Key difference from the CJS builder: uses format: 'esm' to support
  * top-level await in dist/entry.js, and injects a createRequire shim
@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "..");
 const DIST_ENTRY = path.join(REPO_ROOT, "dist", "entry.js");
-const OUT_DIR = path.join(REPO_ROOT, "dist-vercel-runtime", "moonshot");
+const OUT_DIR = path.join(REPO_ROOT, "dist", "sandbox");
 const OUT_FILE = path.join(OUT_DIR, "openclaw.bundle.mjs");
 const DEPS_OUT_FILE = path.join(OUT_DIR, "bundle-deps.tar.gz");
 const OPENCLAW_PKG_OUT_FILE = path.join(OUT_DIR, "bundle-openclaw-pkg.tar.gz");
@@ -36,7 +36,7 @@ const SRC_PLUGIN_SDK_DIR = path.join(REPO_ROOT, "src", "plugin-sdk");
 const DISABLED_STUB_REGISTRY_FILE = path.join(SRC_PLUGIN_SDK_DIR, "disabled-stubs", "registry.ts");
 const PLUGIN_SDK_IMPORT_PATTERN =
   /(?:from\s+["']openclaw\/plugin-sdk\/([^"']+)["']|import\s+["']openclaw\/plugin-sdk\/([^"']+)["'])/g;
-const PROFILE_NAME = process.env.OPENCLAW_BUNDLE_PROFILE ?? "vercel-sandbox";
+const PROFILE_NAME = process.env.OPENCLAW_BUNDLE_PROFILE ?? "sandbox";
 const PROFILE_PATH = path.join(REPO_ROOT, ".fork", `bundle-profile.${PROFILE_NAME}.json`);
 
 const log = (...parts) => process.stderr.write(parts.join(" ") + "\n");

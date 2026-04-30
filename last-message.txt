@@ -4,17 +4,17 @@ Files added:
 - Publish script: scripts/publish-vercel-blob.mjs
 
 Files modified:
-- Build/profile contract: scripts/build-bundle-esm.mjs, .fork/bundle-profile.vercel-sandbox.json
-- Verifier and smoke: scripts/verify-vercel-bundle-contract.mjs, scripts/smoke-vercel-bundle-local.mjs
+- Build/profile contract: scripts/build-bundle-esm.mjs, .fork/bundle-profile.sandbox.json
+- Verifier and smoke: scripts/verify-sandbox-bundle-contract.mjs, scripts/smoke-sandbox-bundle-local.mjs
 - Package metadata: package.json, pnpm-lock.yaml
 - Notes: .notes/bundle-recommendations-fork.md
 
 Verification:
 - pnpm tsgo: PASS.
 - pnpm build: PASS. Key output: build-all completed canvas:a2ui bundle check, tsdown, runtime-postbuild, plugin-sdk dts, plugin-sdk export check, metadata copies, build info, and CLI compatibility writes.
-- pnpm build:vercel-sandbox-bundle: PASS. Bundle 32,828,300 bytes; deps tar 1,507,454 bytes; openclaw package tar 13,098 bytes; release tar 8,872,125 bytes; plugin-sdk subpaths 170.
-- pnpm verify:vercel-sandbox-bundle: PASS. Warning only: openclaw.bundle.mjs exceeds warning budget 32,828,300 > 31,457,280. JSON: {"ok":true,"profile":"vercel-sandbox","bundleBytes":32828300,"depsTarBytes":1507454,"pkgTarBytes":13098,"releaseTarBytes":8872125,"pluginSdkSubpathCount":170,"disabledPublicSurfaceCount":1}.
-- pnpm smoke:vercel-sandbox-bundle:local: PASS. Elapsed 557 ms. Parsed bundle smoke JSON: {"ok":true,"pluginCount":0,"errorCount":0}. plugin-load-profile line count: 0.
+- pnpm build:sandbox-bundle: PASS. Bundle 32,828,300 bytes; deps tar 1,507,454 bytes; openclaw package tar 13,098 bytes; release tar 8,872,125 bytes; plugin-sdk subpaths 170.
+- pnpm verify:sandbox-bundle: PASS. Warning only: openclaw.bundle.mjs exceeds warning budget 32,828,300 > 31,457,280. JSON: {"ok":true,"profile":"sandbox","bundleBytes":32828300,"depsTarBytes":1507454,"pkgTarBytes":13098,"releaseTarBytes":8872125,"pluginSdkSubpathCount":170,"disabledPublicSurfaceCount":1}.
+- pnpm smoke:sandbox-bundle:local: PASS. Elapsed 557 ms. Parsed bundle smoke JSON: {"ok":true,"pluginCount":0,"errorCount":0}. plugin-load-profile line count: 0.
 - Targeted format: PASS via pnpm format on touched files. pnpm check intentionally skipped per task because oxlint-tsgolint SIGPIPE is known pre-existing tooling debt.
 - Empty-token publish dry run: PASS expected failure. Exit code 1. Error: publish-vercel-blob: missing BLOB_READ_WRITE_TOKEN env var; token status: missing. Set it before publishing.
 

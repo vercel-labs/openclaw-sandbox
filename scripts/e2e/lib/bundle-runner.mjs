@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "..", "..", "..");
-const OUT_DIR = path.join(REPO_ROOT, "dist-vercel-runtime", "moonshot");
+const OUT_DIR = path.join(REPO_ROOT, "dist", "sandbox");
 
 const DEFAULT_SIGNING_SECRET = "test-signing-secret-1234567890abcdef";
 const DEFAULT_BOT_TOKEN = "xoxb-e2e-test-token";
@@ -176,7 +176,7 @@ export async function runBundle({
 } = {}) {
   if (!(await fileExists(path.join(OUT_DIR, "openclaw.bundle.mjs")))) {
     throw new Error(
-      "bundle-runner: dist-vercel-runtime/moonshot/openclaw.bundle.mjs is missing. Run pnpm build:vercel-sandbox-bundle first.",
+      "bundle-runner: dist/sandbox/openclaw.bundle.mjs is missing. Run pnpm build:sandbox-bundle first.",
     );
   }
 
@@ -212,7 +212,7 @@ export async function runBundle({
     HOME: homeDir,
     OPENCLAW_HOME: homeDir,
     OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_BUNDLE_PROFILE: "vercel-sandbox",
+    OPENCLAW_BUNDLE_PROFILE: "sandbox",
     OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(tmpDir, "extensions"),
     // Disable any startup probes that might block on outbound network.
     OPENCLAW_DISABLE_TELEMETRY: "1",

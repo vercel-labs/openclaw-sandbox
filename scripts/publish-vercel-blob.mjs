@@ -9,7 +9,7 @@ import { put } from "@vercel/blob";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "..");
-const OUT_DIR = path.join(REPO_ROOT, "dist-vercel-runtime", "moonshot");
+const OUT_DIR = path.join(REPO_ROOT, "dist", "sandbox");
 const RELEASE_JSON_PATH = path.join(OUT_DIR, "release.json");
 const CONTRACT_JSON_PATH = path.join(OUT_DIR, "bundle-contract.json");
 const RELEASE_TAR_PATH = path.join(OUT_DIR, "openclaw-release.tar.gz");

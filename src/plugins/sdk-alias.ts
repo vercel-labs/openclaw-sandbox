@@ -535,7 +535,7 @@ function isBundledPluginRuntimeModulePath(modulePath: string): boolean {
   if (normalizedPortablePath.includes("/dist/extensions/")) {
     return true;
   }
-  // Vercel-sandbox bundle layout extracts each plugin into
+  // sandbox bundle layout extracts each plugin into
   // <root>/extensions/<plugin>/. Without this branch, jiti falls into the
   // native sync require-ESM path for those files, which on Node 22 surfaces
   // as the "imported again after being required. Status = 0" dual-load when
