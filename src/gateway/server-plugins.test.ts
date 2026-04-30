@@ -7,6 +7,7 @@ import type { GatewayRequestContext, GatewayRequestOptions } from "./server-meth
 
 const loadOpenClawPlugins = vi.hoisted(() => vi.fn());
 const resolveGatewayStartupPluginIds = vi.hoisted(() => vi.fn(() => ["discord", "telegram"]));
+const resolveChannelPluginIds = vi.hoisted(() => vi.fn(() => ["slack"]));
 const applyPluginAutoEnable = vi.hoisted(() =>
   vi.fn(({ config }) => ({ config, changes: [], autoEnabledReasons: {} })),
 );
@@ -35,6 +36,7 @@ vi.mock("../plugins/runtime/load-context.js", () => ({
 }));
 
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
+  resolveChannelPluginIds,
   resolveGatewayStartupPluginIds,
 }));
 
@@ -241,6 +243,7 @@ beforeAll(async () => {
 beforeEach(() => {
   loadOpenClawPlugins.mockReset();
   resolveGatewayStartupPluginIds.mockReset().mockReturnValue(["discord", "telegram"]);
+  resolveChannelPluginIds.mockReset().mockReturnValue(["slack"]);
   applyPluginAutoEnable
     .mockReset()
     .mockImplementation(({ config }) => ({ config, changes: [], autoEnabledReasons: {} }));
@@ -425,6 +428,50 @@ describe("loadGatewayPlugins", () => {
     expect(loadOpenClawPlugins).not.toHaveBeenCalled();
     expect(result.pluginRegistry.plugins).toEqual([]);
     expect(result.gatewayMethods).toEqual(["sessions.get"]);
+  });
+
+  test("loads one bundled channel plugin in bundle runtime when startup scope is empty", async () => {
+    resolveGatewayStartupPluginIds.mockReturnValue([]);
+    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+    (
+      globalThis as { __OPENCLAW_BUNDLE_PLUGIN_SDK_REGISTRY__?: unknown }
+    ).__OPENCLAW_BUNDLE_PLUGIN_SDK_REGISTRY__ = {};
+
+    try {
+      serverPluginsModule.loadGatewayPlugins({
+        cfg: {},
+        workspaceDir: "/tmp",
+        log: createTestLog(),
+        coreGatewayHandlers: {},
+        baseMethods: ["sessions.get"],
+      });
+    } finally {
+      delete (globalThis as { __OPENCLAW_BUNDLE_PLUGIN_SDK_REGISTRY__?: unknown })
+        .__OPENCLAW_BUNDLE_PLUGIN_SDK_REGISTRY__;
+    }
+
+    expect(resolveChannelPluginIds).toHaveBeenCalledWith({
+      config: {},
+      workspaceDir: "/tmp",
+      env: process.env,
+    });
+    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            allow: ["slack"],
+            entries: { slack: { enabled: true } },
+          }),
+        }),
+        activationSourceConfig: expect.objectContaining({
+          plugins: expect.objectContaining({
+            allow: ["slack"],
+            entries: { slack: { enabled: true } },
+          }),
+        }),
+        onlyPluginIds: ["slack"],
+      }),
+    );
   });
 
   test("stores workspaceDir on the active registry when startup scope is empty", () => {

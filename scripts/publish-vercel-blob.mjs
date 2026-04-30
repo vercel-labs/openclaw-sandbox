@@ -89,10 +89,36 @@ async function main() {
     contentType: "application/json",
   });
 
+  // vclaw passes --bundle-url <openclaw.bundle.mjs URL>; vercel-openclaw's
+  // bootstrap then resolves sibling URLs (channels.tar.gz, bundle-deps.tar.gz,
+  // bundle-openclaw-pkg.tar.gz, channel-shared-chunks.tar.gz) by relative path
+  // against that .mjs URL. Publish each as a sibling so a single Blob path
+  // serves the whole sandbox bootstrap.
+  const SIBLING_FILES = [
+    { pathname: "openclaw.bundle.mjs", contentType: "application/javascript" },
+    { pathname: "bundle-deps.tar.gz", contentType: "application/gzip" },
+    { pathname: "bundle-openclaw-pkg.tar.gz", contentType: "application/gzip" },
+    { pathname: "channels.tar.gz", contentType: "application/gzip" },
+    { pathname: "channel-shared-chunks.tar.gz", contentType: "application/gzip" },
+  ];
+  const siblingUrls = {};
+  for (const file of SIBLING_FILES) {
+    const filePath = path.join(OUT_DIR, file.pathname);
+    const data = await readFile(filePath);
+    const result = await upload(file.pathname, data, {
+      token,
+      cacheControlMaxAge: 60,
+      contentType: file.contentType,
+    });
+    siblingUrls[file.pathname] = result.url;
+  }
+
   clearTimeout(timeout);
   console.log(
     JSON.stringify({
       ok: true,
+      bundleUrl: siblingUrls["openclaw.bundle.mjs"],
+      siblingUrls,
       immutableUrl: immutable.url,
       latestUrl: latest.url,
       releaseJsonUrl: releaseJson.url,

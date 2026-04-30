@@ -204,6 +204,66 @@ function asMessages(val: unknown): OpenAiChatMessage[] {
   return Array.isArray(val) ? (val as OpenAiChatMessage[]) : [];
 }
 
+// Launch-verify probe: vercel-openclaw's deploy verifier needs a deterministic
+// reply through the same /v1/chat/completions surface that real chat traffic
+// uses. The verifier sets a private header *and* a fixed prompt; both must
+// match to bypass agent execution. Header is mandatory so this branch cannot
+// be triggered by user prompts alone.
+const LAUNCH_VERIFY_HEADER = "x-openclaw-launch-verify-token";
+const LAUNCH_VERIFY_TOKENS = new Set(["launch-verify-ok", "wake-from-sleep-ok"]);
+
+function readLaunchVerifyHeader(req: IncomingMessage): string | null {
+  const raw = req.headers[LAUNCH_VERIFY_HEADER];
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof value !== "string" || !LAUNCH_VERIFY_TOKENS.has(value)) {
+    return null;
+  }
+  return value;
+}
+
+function resolveLaunchVerifyToken(
+  req: IncomingMessage,
+  payload: OpenAiChatCompletionRequest,
+): string | null {
+  const token = readLaunchVerifyHeader(req);
+  if (!token) {
+    return null;
+  }
+  const messages = asMessages(payload.messages);
+  let lastUserContent = "";
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const role = (messages[i] as { role?: unknown }).role;
+    if (typeof role === "string" && role === "user") {
+      lastUserContent = extractTextContent(messages[i]?.content).trim();
+      break;
+    }
+  }
+  if (lastUserContent !== `Reply with exactly: ${token}`) {
+    return null;
+  }
+  return token;
+}
+
+function sendLaunchVerifyCompletion(
+  res: ServerResponse,
+  params: { runId: string; model: string; token: string },
+): void {
+  sendJson(res, 200, {
+    id: params.runId,
+    object: "chat.completion",
+    created: Math.floor(Date.now() / 1000),
+    model: params.model,
+    choices: [
+      {
+        index: 0,
+        message: { role: "assistant", content: params.token },
+        finish_reason: "stop",
+      },
+    ],
+    usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+  });
+}
+
 function extractTextContent(content: unknown): string {
   if (typeof content === "string") {
     return content;
@@ -548,6 +608,20 @@ export async function handleOpenAiHttpRequest(
       error: { message: modelError, type: "invalid_request_error" },
     });
     return true;
+  }
+  // Header + exact-prompt match short-circuits agent execution and returns the
+  // probe token. Verifier always uses stream:false; if a probe header arrives
+  // alongside stream:true (unexpected), fall through to normal agent path.
+  if (!stream) {
+    const probeToken = resolveLaunchVerifyToken(req, payload);
+    if (probeToken) {
+      sendLaunchVerifyCompletion(res, {
+        runId: `chatcmpl_${randomUUID()}`,
+        model,
+        token: probeToken,
+      });
+      return true;
+    }
   }
   const activeTurnContext = resolveActiveTurnContext(payload.messages);
   const prompt = buildAgentPrompt(payload.messages, activeTurnContext.activeUserMessageIndex);

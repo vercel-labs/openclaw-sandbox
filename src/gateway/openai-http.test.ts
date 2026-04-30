@@ -1353,4 +1353,96 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       );
     },
   );
+
+  it("short-circuits launch-verify probe with header + exact prompt", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    const res = await postChatCompletions(
+      port,
+      {
+        model: "openclaw",
+        stream: false,
+        messages: [{ role: "user", content: "Reply with exactly: launch-verify-ok" }],
+      },
+      { "x-openclaw-launch-verify-token": "launch-verify-ok" },
+    );
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as {
+      choices: Array<{ message: { content: string }; finish_reason: string }>;
+    };
+    expect(json.choices?.[0]?.message?.content).toBe("launch-verify-ok");
+    expect(json.choices?.[0]?.finish_reason).toBe("stop");
+    expect(agentCommand).toHaveBeenCalledTimes(0);
+  });
+
+  it("short-circuits wake-from-sleep-ok probe", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    const res = await postChatCompletions(
+      port,
+      {
+        model: "openclaw",
+        stream: false,
+        messages: [{ role: "user", content: "Reply with exactly: wake-from-sleep-ok" }],
+      },
+      { "x-openclaw-launch-verify-token": "wake-from-sleep-ok" },
+    );
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { choices: Array<{ message: { content: string } }> };
+    expect(json.choices?.[0]?.message?.content).toBe("wake-from-sleep-ok");
+    expect(agentCommand).toHaveBeenCalledTimes(0);
+  });
+
+  it("falls through to agent when probe header is absent", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "agent reply" }] } as never);
+    const res = await postChatCompletions(port, {
+      model: "openclaw",
+      stream: false,
+      messages: [{ role: "user", content: "Reply with exactly: launch-verify-ok" }],
+    });
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { choices: Array<{ message: { content: string } }> };
+    expect(json.choices?.[0]?.message?.content).toBe("agent reply");
+    expect(agentCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls through to agent when probe header is present but prompt does not match", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "agent reply" }] } as never);
+    const res = await postChatCompletions(
+      port,
+      {
+        model: "openclaw",
+        stream: false,
+        messages: [{ role: "user", content: "What is the meaning of life?" }],
+      },
+      { "x-openclaw-launch-verify-token": "launch-verify-ok" },
+    );
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { choices: Array<{ message: { content: string } }> };
+    expect(json.choices?.[0]?.message?.content).toBe("agent reply");
+    expect(agentCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores unknown probe header tokens", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "agent reply" }] } as never);
+    const res = await postChatCompletions(
+      port,
+      {
+        model: "openclaw",
+        stream: false,
+        messages: [{ role: "user", content: "Reply with exactly: bogus-token" }],
+      },
+      { "x-openclaw-launch-verify-token": "bogus-token" },
+    );
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { choices: Array<{ message: { content: string } }> };
+    expect(json.choices?.[0]?.message?.content).toBe("agent reply");
+    expect(agentCommand).toHaveBeenCalledTimes(1);
+  });
 });
