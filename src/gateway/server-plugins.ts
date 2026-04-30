@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 import { normalizeModelRef, parseModelRef } from "../agents/model-selection.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveGatewayStartupPluginIds } from "../plugins/channel-plugin-ids.js";
+import {
+  resolveChannelPluginIds,
+  resolveGatewayStartupPluginIds,
+} from "../plugins/channel-plugin-ids.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -386,6 +389,59 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
 
 // ── Plugin loading ──────────────────────────────────────────────────
 
+function isOpenClawBundleRuntime(): boolean {
+  if (
+    (globalThis as { __OPENCLAW_BUNDLE_PLUGIN_SDK_REGISTRY__?: unknown })
+      .__OPENCLAW_BUNDLE_PLUGIN_SDK_REGISTRY__
+  ) {
+    return true;
+  }
+  return process.argv.some((entry) => entry.endsWith("openclaw.bundle.mjs"));
+}
+
+function resolveBundleRuntimeSmokePluginIds(params: {
+  config: OpenClawConfig;
+  workspaceDir: string;
+}): string[] {
+  if (!isOpenClawBundleRuntime()) {
+    return [];
+  }
+  const channelPluginIds = resolveChannelPluginIds({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: process.env,
+  });
+  const smokePluginId =
+    channelPluginIds.find((pluginId) => pluginId === "slack") ?? channelPluginIds[0];
+  return smokePluginId ? [smokePluginId] : [];
+}
+
+function withBundleRuntimeSmokePluginsEnabled(params: {
+  config: OpenClawConfig;
+  pluginIds: readonly string[];
+}): OpenClawConfig {
+  if (params.pluginIds.length === 0) {
+    return params.config;
+  }
+  const allow = new Set(params.config.plugins?.allow ?? []);
+  const entries = { ...params.config.plugins?.entries };
+  for (const pluginId of params.pluginIds) {
+    allow.add(pluginId);
+    entries[pluginId] = {
+      ...entries[pluginId],
+      enabled: true,
+    };
+  }
+  return {
+    ...params.config,
+    plugins: {
+      ...params.config.plugins,
+      allow: [...allow],
+      entries,
+    },
+  };
+}
+
 function createGatewayPluginRegistrationLogger(params?: {
   suppressInfoLogs?: boolean;
 }): PluginLogger {
@@ -442,7 +498,7 @@ export function loadGatewayPlugins(params: {
             env: process.env,
           });
   const resolvedConfig = autoEnabled.config;
-  const pluginIds =
+  const configuredPluginIds =
     params.pluginIds ??
     resolveGatewayStartupPluginIds({
       config: resolvedConfig,
@@ -450,6 +506,17 @@ export function loadGatewayPlugins(params: {
       workspaceDir: params.workspaceDir,
       env: process.env,
     });
+  const pluginIds =
+    configuredPluginIds.length > 0
+      ? configuredPluginIds
+      : resolveBundleRuntimeSmokePluginIds({
+          config: resolvedConfig,
+          workspaceDir: params.workspaceDir,
+        });
+  const loadConfig =
+    configuredPluginIds.length === 0 && isOpenClawBundleRuntime()
+      ? withBundleRuntimeSmokePluginsEnabled({ config: resolvedConfig, pluginIds })
+      : resolvedConfig;
   if (pluginIds.length === 0) {
     const pluginRegistry = createEmptyPluginRegistry();
     setActivePluginRegistry(pluginRegistry, undefined, "gateway-bindable", params.workspaceDir);
@@ -459,8 +526,9 @@ export function loadGatewayPlugins(params: {
     };
   }
   const pluginRegistry = loadOpenClawPlugins({
-    config: resolvedConfig,
-    activationSourceConfig: params.activationSourceConfig ?? params.cfg,
+    config: loadConfig,
+    activationSourceConfig:
+      loadConfig === resolvedConfig ? (params.activationSourceConfig ?? params.cfg) : loadConfig,
     autoEnabledReasons: autoEnabled.autoEnabledReasons,
     workspaceDir: params.workspaceDir,
     onlyPluginIds: pluginIds,
