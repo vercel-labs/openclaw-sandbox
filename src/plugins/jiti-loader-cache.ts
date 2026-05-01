@@ -1,4 +1,5 @@
-import { createJiti } from "jiti";
+import { createRequire } from "node:module";
+import type { createJiti } from "jiti";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { tryNativeRequireJavaScriptModule } from "./native-module-require.js";
 import {
@@ -11,6 +12,18 @@ import {
 export type PluginJitiLoader = ReturnType<typeof createJiti>;
 export type PluginJitiLoaderFactory = typeof createJiti;
 export type PluginJitiLoaderCache = Map<string, PluginJitiLoader>;
+
+let cachedDefaultCreateJiti: PluginJitiLoaderFactory | undefined;
+function getDefaultCreateJiti(): PluginJitiLoaderFactory {
+  if (cachedDefaultCreateJiti) {
+    return cachedDefaultCreateJiti;
+  }
+  const jitiModule = createRequire(import.meta.url)("jiti") as {
+    createJiti: PluginJitiLoaderFactory;
+  };
+  cachedDefaultCreateJiti = jitiModule.createJiti;
+  return cachedDefaultCreateJiti;
+}
 
 export function getCachedPluginJitiLoader(params: {
   cache: PluginJitiLoaderCache;
@@ -76,7 +89,7 @@ export function getCachedPluginJitiLoader(params: {
   if (cached) {
     return cached;
   }
-  const jitiLoader = (params.createLoader ?? createJiti)(jitiFilename, {
+  const jitiLoader = (params.createLoader ?? getDefaultCreateJiti())(jitiFilename, {
     ...buildPluginLoaderJitiOptions(aliasMap),
     tryNative,
   });
