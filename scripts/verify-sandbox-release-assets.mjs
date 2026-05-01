@@ -15,6 +15,9 @@ const REQUIRED_ASSETS = [
   "bundle-deps.tar.gz",
   "bundle-openclaw-pkg.tar.gz",
   "channels.tar.gz",
+  "channel-catalog.json",
+  "workspace-templates.tar.gz",
+  "control-ui.tar.gz",
   "release.json",
   "bundle-contract.json",
   "asset-manifest.json",
@@ -26,8 +29,11 @@ const REQUIRED_TAR_ENTRIES = [
   "bundle-deps.tar.gz",
   "bundle-openclaw-pkg.tar.gz",
   "channels.tar.gz",
+  "channel-catalog.json",
+  "control-ui.tar.gz",
   "openclaw.bundle.mjs",
   "release.json",
+  "workspace-templates.tar.gz",
 ];
 
 function parseArgs(argv) {
