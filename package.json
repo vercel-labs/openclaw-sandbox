@@ -1446,7 +1446,7 @@
     "release:plugins:clawhub:plan": "node --import tsx scripts/plugin-clawhub-release-plan.ts",
     "release:plugins:npm:check": "node --import tsx scripts/plugin-npm-release-check.ts",
     "release:plugins:npm:plan": "node --import tsx scripts/plugin-npm-release-plan.ts",
-    "release:sandbox-bundle:check": "pnpm build && pnpm build:sandbox-bundle && pnpm verify:sandbox-bundle && pnpm smoke:sandbox-bundle:local && pnpm e2e:bundle:l2 && pnpm e2e:bundle:l3",
+    "release:sandbox-bundle:check": "pnpm build && pnpm ui:build && pnpm build:sandbox-bundle && pnpm verify:sandbox-bundle && pnpm smoke:sandbox-bundle:local && pnpm e2e:bundle:l2 && pnpm e2e:bundle:l3",
     "runtime-sidecars:check": "node --import tsx scripts/generate-runtime-sidecar-paths-baseline.ts --check",
     "runtime-sidecars:gen": "node --import tsx scripts/generate-runtime-sidecar-paths-baseline.ts --write",
     "smoke:sandbox-bundle:local": "node scripts/smoke-sandbox-bundle-local.mjs",

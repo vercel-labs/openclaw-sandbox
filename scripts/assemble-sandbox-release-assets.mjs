@@ -18,6 +18,9 @@ const REQUIRED_ASSETS = [
   ["bundle-deps.tar.gz", "runtime-deps"],
   ["bundle-openclaw-pkg.tar.gz", "openclaw-package-shim"],
   ["channels.tar.gz", "bundled-channel-extensions"],
+  ["channel-catalog.json", "channel-catalog"],
+  ["workspace-templates.tar.gz", "workspace-templates"],
+  ["control-ui.tar.gz", "control-ui-assets"],
   ["release.json", "release-metadata"],
   ["bundle-contract.json", "bundle-contract"],
 ];
@@ -89,12 +92,54 @@ async function copyOptionalAsset(fileName) {
   return true;
 }
 
-async function createTarball(fileName, entries) {
-  await run("tar", ["-czf", fileName, ...entries], {
-    cwd: ASSET_DIR,
+async function createTarball(fileName, entries, cwd = ASSET_DIR) {
+  await run("tar", ["-czf", path.join(ASSET_DIR, fileName), ...entries], {
+    cwd,
     env: { ...process.env, COPYFILE_DISABLE: "1" },
     stdio: ["ignore", "inherit", "inherit"],
   });
+}
+
+async function createSupportAssets() {
+  await copyFile(
+    path.join(REPO_ROOT, "dist", "channel-catalog.json"),
+    path.join(ASSET_DIR, "channel-catalog.json"),
+  );
+
+  const templatesDir = path.join(REPO_ROOT, "docs", "reference", "templates");
+  const templatesInfo = await stat(templatesDir).catch((err) => {
+    if (err?.code === "ENOENT") {
+      throw new Error("missing workspace templates dir: " + path.relative(REPO_ROOT, templatesDir));
+    }
+    throw err;
+  });
+  if (!templatesInfo.isDirectory()) {
+    throw new Error(
+      "workspace templates path is not a directory: " + path.relative(REPO_ROOT, templatesDir),
+    );
+  }
+  await createTarball(
+    "workspace-templates.tar.gz",
+    ["templates"],
+    path.join(REPO_ROOT, "docs", "reference"),
+  );
+
+  const controlUiDir = path.join(REPO_ROOT, "dist", "control-ui");
+  const controlUiIndex = path.join(controlUiDir, "index.html");
+  const controlUiInfo = await stat(controlUiIndex).catch((err) => {
+    if (err?.code === "ENOENT") {
+      throw new Error(
+        "missing Control UI build: " +
+          path.relative(REPO_ROOT, controlUiIndex) +
+          ". Run pnpm ui:build before assembling sandbox release assets.",
+      );
+    }
+    throw err;
+  });
+  if (!controlUiInfo.isFile()) {
+    throw new Error("Control UI index is not a file: " + path.relative(REPO_ROOT, controlUiIndex));
+  }
+  await createTarball("control-ui.tar.gz", ["control-ui"], path.join(REPO_ROOT, "dist"));
 }
 
 async function main() {
@@ -114,7 +159,13 @@ async function main() {
   await rm(ASSET_DIR, { recursive: true, force: true });
   await mkdir(ASSET_DIR, { recursive: true });
 
+  await createSupportAssets();
   for (const [fileName] of REQUIRED_ASSETS) {
+    if (
+      ["channel-catalog.json", "workspace-templates.tar.gz", "control-ui.tar.gz"].includes(fileName)
+    ) {
+      continue;
+    }
     await copyRequiredAsset(fileName);
   }
   const optionalAssets = [];
