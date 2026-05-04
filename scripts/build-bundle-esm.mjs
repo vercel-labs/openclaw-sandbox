@@ -11,10 +11,12 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, readdir, rm, stat, readFile, writeFile } from "node:fs/promises";
+import { builtinModules } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { pluginSdkSubpaths as publicPluginSdkSubpaths } from "./lib/plugin-sdk-entries.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "..");
@@ -38,6 +40,25 @@ const SRC_PLUGIN_SDK_DIR = path.join(REPO_ROOT, "src", "plugin-sdk");
 const DISABLED_STUB_REGISTRY_FILE = path.join(SRC_PLUGIN_SDK_DIR, "disabled-stubs", "registry.ts");
 const PLUGIN_SDK_IMPORT_PATTERN =
   /(?:from\s+["']openclaw\/plugin-sdk\/([^"']+)["']|import\s+["']openclaw\/plugin-sdk\/([^"']+)["'])/g;
+const BUNDLED_PLUGIN_SDK_EXCLUDED_SUBPATHS = new Set([
+  "agent-runtime-test-contracts",
+  "channel-contract-testing",
+  "channel-target-testing",
+  "channel-test-helpers",
+  "plugin-test-api",
+  "plugin-test-contracts",
+  "plugin-test-runtime",
+  "provider-http-test-mocks",
+  "provider-test-contracts",
+  "test-env",
+  "test-fixtures",
+  "test-node-mocks",
+  "testing",
+]);
+const NODE_BUILTIN_MODULES = new Set([
+  ...builtinModules,
+  ...builtinModules.map((moduleName) => `node:${moduleName}`),
+]);
 const PROFILE_NAME = process.env.OPENCLAW_BUNDLE_PROFILE ?? "sandbox";
 const PROFILE_PATH = path.join(REPO_ROOT, ".fork", `bundle-profile.${PROFILE_NAME}.json`);
 
@@ -308,7 +329,126 @@ async function collectPluginSdkSubpathsUsedByBundledExtensions() {
       }
     }
   }
+
+  if (subpaths.size === 0) {
+    for (const subpath of publicPluginSdkSubpaths) {
+      if (!BUNDLED_PLUGIN_SDK_EXCLUDED_SUBPATHS.has(subpath)) {
+        subpaths.add(subpath);
+      }
+    }
+  }
+
   return [...subpaths].toSorted((left, right) => left.localeCompare(right));
+}
+
+function stripJavaScriptComments(source) {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+}
+
+function packageNameFromBareSpecifier(specifier) {
+  if (
+    !specifier ||
+    specifier.startsWith(".") ||
+    specifier.startsWith("/") ||
+    specifier.includes(":")
+  ) {
+    return null;
+  }
+  const parts = specifier.split("/");
+  return specifier.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0];
+}
+
+async function addInstalledPackageDependencyClosure(runtimeDeps, packageName) {
+  if (!packageName || NODE_BUILTIN_MODULES.has(packageName)) {
+    return;
+  }
+  const packageJsonPath = path.join(REPO_ROOT, "node_modules", packageName, "package.json");
+  const pkg = await readFile(packageJsonPath, "utf8")
+    .then((source) => JSON.parse(source))
+    .catch(() => null);
+  if (!pkg) {
+    return;
+  }
+
+  const wasPresent = runtimeDeps.has(packageName);
+  runtimeDeps.add(packageName);
+  if (wasPresent) {
+    return;
+  }
+
+  const dependencyNames = [
+    ...Object.keys(pkg.dependencies ?? {}),
+    ...Object.keys(pkg.optionalDependencies ?? {}),
+  ];
+  for (const dependencyName of dependencyNames) {
+    await addInstalledPackageDependencyClosure(runtimeDeps, dependencyName);
+  }
+}
+
+async function collectNestedInstalledPackageDependencies(runtimeDeps) {
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const packageName of [...runtimeDeps]) {
+      const packageRoot = path.join(REPO_ROOT, "node_modules", packageName);
+      for (const packageJsonPath of await walkFiles(packageRoot)) {
+        if (path.basename(packageJsonPath) !== "package.json") {
+          continue;
+        }
+        const pkg = await readFile(packageJsonPath, "utf8")
+          .then((source) => JSON.parse(source))
+          .catch(() => null);
+        if (!pkg) {
+          continue;
+        }
+        const dependencyNames = [
+          ...Object.keys(pkg.dependencies ?? {}),
+          ...Object.keys(pkg.optionalDependencies ?? {}),
+        ];
+        for (const dependencyName of dependencyNames) {
+          const beforeSize = runtimeDeps.size;
+          await addInstalledPackageDependencyClosure(runtimeDeps, dependencyName);
+          if (runtimeDeps.size !== beforeSize) {
+            changed = true;
+          }
+        }
+      }
+    }
+  }
+}
+
+async function collectChannelSharedChunkRuntimeDeps(baseRuntimeDeps) {
+  const runtimeDeps = new Set();
+  const importPattern =
+    /(?:^|[;\n])\s*(?:import|export)\s+(?:[^"']*?\s+from\s+)?["']([^"']+)["']|\bimport\(\s*["']([^"']+)["']\s*\)/g;
+
+  for (const dep of baseRuntimeDeps) {
+    await addInstalledPackageDependencyClosure(runtimeDeps, dep);
+  }
+
+  for (const file of await walkFiles(path.join(REPO_ROOT, "dist"))) {
+    if (path.relative(path.join(REPO_ROOT, "dist"), file).includes(path.sep)) {
+      continue;
+    }
+    if (!file.endsWith(".js")) {
+      continue;
+    }
+    const source = stripJavaScriptComments(await readFile(file, "utf8"));
+    for (const match of source.matchAll(importPattern)) {
+      const specifier = match[1] ?? match[2];
+      if (!specifier || NODE_BUILTIN_MODULES.has(specifier)) {
+        continue;
+      }
+      const packageName = packageNameFromBareSpecifier(specifier);
+      if (packageName) {
+        await addInstalledPackageDependencyClosure(runtimeDeps, packageName);
+      }
+    }
+  }
+
+  await collectNestedInstalledPackageDependencies(runtimeDeps);
+
+  return [...runtimeDeps].toSorted((left, right) => left.localeCompare(right));
 }
 
 function toIdentifierSuffix(value) {
@@ -502,7 +642,7 @@ const main = async () => {
   await mkdir(OUT_DIR, { recursive: true });
   const manifest = await loadBundleProfile();
   await assertDisabledPublicSurfaceManifest(manifest);
-  const runtimeDeps = manifest.externalRuntimeDeps;
+  const runtimeDeps = await collectChannelSharedChunkRuntimeDeps(manifest.externalRuntimeDeps);
   const disabledOptionalAliases = createDisabledOptionalAliasMap(manifest);
 
   if (!(await stat(DIST_ENTRY).catch(() => null))) {
@@ -561,7 +701,13 @@ const main = async () => {
         __OPENCLAW_VERSION__: JSON.stringify(VERSION),
       },
       alias: disabledOptionalAliases,
-      external: ["fsevents", "@img/sharp-*", "@node-llama-cpp/*", "node-llama-cpp", ...runtimeDeps],
+      external: [
+        "fsevents",
+        "@img/sharp-*",
+        "@node-llama-cpp/*",
+        "node-llama-cpp",
+        ...manifest.externalRuntimeDeps,
+      ],
       plugins: [createRequireRewritePlugin],
     });
   } finally {
