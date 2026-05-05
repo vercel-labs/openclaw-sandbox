@@ -61,7 +61,6 @@ async function main() {
     // Some Slack startup paths register the route without a boot-time auth.test.
     // Treat auth.test as useful evidence when present; the signed inbound event
     // below is the gate for this release-bundle layer.
-    const outboundBaseline = Date.now();
     let bootAuth = null;
     try {
       bootAuth = await mockSlack.waitForCall((c) => c.method === "auth.test", {
@@ -77,6 +76,7 @@ async function main() {
       channelId: "C0E2ETEST",
       text: "<@U0E2ETESTBOT> ping from l3",
     });
+    const eventStartMs = Date.now();
     const inboundStart = performance.now();
     const { response: inboundResponse } = await postSignedSlackEvent({
       url: `${runner.url}/slack/events`,
@@ -98,18 +98,20 @@ async function main() {
       );
     }
 
-    // Give the bundle a short window to emit any side-effect calls (typing
-    // reactions, ack reactions, conversations.info lookups, etc.). Without a
-    // configured model provider we don't expect a chat.postMessage, but we
-    // record whatever the channel did emit so future agent wiring is visible.
+    // Give the bundle a short window to emit side-effect calls caused by the
+    // signed event. This is the deterministic no-credentials behavior gate for
+    // now; provider-backed chat.postMessage can be layered on later.
     await new Promise((r) => setTimeout(r, OUTBOUND_GRACE_MS));
 
-    const callsAfterEvent = mockSlack.calls.filter(
-      (c) => c.timestamp > (bootAuth?.timestamp ?? outboundBaseline),
-    );
+    const callsAfterEvent = mockSlack.calls.filter((c) => c.timeMs >= eventStartMs);
     const callMethods = callsAfterEvent.map((c) => c.method);
     const postedMessage = callsAfterEvent.find((c) => c.method === "chat.postMessage");
-
+    const eventInducedMethod = callMethods.find((method) => method !== "auth.test");
+    if (!eventInducedMethod) {
+      throw new Error(
+        `signed Slack event produced no event-induced Slack API calls; methods=${callMethods.join(", ") || "<none>"}\nstderr:\n${runner.getStderr()}`,
+      );
+    }
     const elapsedMs = Math.round(performance.now() - startedAt);
     process.stdout.write(
       `${JSON.stringify({
@@ -122,6 +124,7 @@ async function main() {
         bootAuthMethod: bootAuth?.method ?? null,
         outboundCallCount: callsAfterEvent.length,
         outboundMethods: callMethods,
+        eventInducedMethod,
         chatPostMessage: postedMessage
           ? {
               channel: postedMessage.body?.channel,

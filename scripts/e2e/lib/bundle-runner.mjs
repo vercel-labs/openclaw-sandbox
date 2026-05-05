@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
-import { copyFile, mkdir, mkdtemp, rm, writeFile, stat } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readdir, rm, writeFile, stat } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "..", "..", "..");
 const OUT_DIR = path.join(REPO_ROOT, "dist", "sandbox");
+const DEFAULT_ASSET_DIR = path.join(OUT_DIR, "release-assets");
 
 const DEFAULT_SIGNING_SECRET = "test-signing-secret-1234567890abcdef";
 const DEFAULT_BOT_TOKEN = "xoxb-e2e-test-token";
@@ -66,57 +67,95 @@ async function fileExists(filePath) {
   }
 }
 
-async function stageBundle(tmpDir) {
-  // Copy bundle entry verbatim.
-  await copyFile(
-    path.join(OUT_DIR, "openclaw.bundle.mjs"),
-    path.join(tmpDir, "openclaw.bundle.mjs"),
-  );
-
-  // The bundle expects deps and the openclaw shim package to land at
-  // <tmp>/node_modules/<dep> (CJS createRequire path). The bundled-deps tar
-  // already starts with `node_modules/` so extracting it at the tmp root is
-  // enough.
-  for (const sidecar of ["bundle-deps.tar.gz", "bundle-openclaw-pkg.tar.gz"]) {
-    const src = path.join(OUT_DIR, sidecar);
-    const dest = path.join(tmpDir, sidecar);
-    await copyFile(src, dest);
-    await runChild("tar", ["-xzf", sidecar], {
-      cwd: tmpDir,
-      stdio: ["ignore", "ignore", "inherit"],
-    });
+async function resolveAssetDir(explicitAssetDir) {
+  if (explicitAssetDir) {
+    return path.resolve(explicitAssetDir);
   }
+  if (await fileExists(DEFAULT_ASSET_DIR)) {
+    return DEFAULT_ASSET_DIR;
+  }
+  return OUT_DIR;
+}
 
-  // channels.tar.gz contains the bundled extension trees (plugin-entry.js etc.)
-  // It extracts to <tmp>/extensions/<plugin>/. The bundle reads
-  // OPENCLAW_BUNDLED_PLUGINS_DIR to locate this layout.
-  const channelsTar = path.join(OUT_DIR, "channels.tar.gz");
-  if (!(await fileExists(channelsTar))) {
+async function findReleaseTar(assetDir) {
+  const entries = await readdir(assetDir).catch(() => []);
+  const versioned = entries.find((entry) =>
+    /^openclaw-sandbox-bundle-v.+-[0-9a-f]{7}\.tar\.gz$/u.test(entry),
+  );
+  return (
+    versioned ?? (entries.includes("openclaw-release.tar.gz") ? "openclaw-release.tar.gz" : null)
+  );
+}
+
+async function copyRequiredAsset(assetDir, tmpDir, fileName) {
+  const source = path.join(assetDir, fileName);
+  if (!(await fileExists(source))) {
     throw new Error(
-      `bundle-runner: missing ${path.relative(REPO_ROOT, channelsTar)}. Run pnpm build first to produce it.`,
+      `bundle-runner: missing required release asset: ${path.relative(REPO_ROOT, source)}`,
     );
   }
-  // channels.tar.gz entries are flat (each plugin dir is at the tarball root),
-  // so extract into <tmp>/extensions/ to match the layout the bundle resolver
-  // expects via OPENCLAW_BUNDLED_PLUGINS_DIR.
-  const extensionsDir = path.join(tmpDir, "extensions");
-  await mkdir(extensionsDir, { recursive: true });
-  await copyFile(channelsTar, path.join(tmpDir, "channels.tar.gz"));
-  await runChild("tar", ["-xzf", path.join(tmpDir, "channels.tar.gz")], {
-    cwd: extensionsDir,
+  await copyFile(source, path.join(tmpDir, fileName));
+}
+
+async function extractTarball(cwd, fileName, targetDir = cwd) {
+  await mkdir(targetDir, { recursive: true });
+  await runChild("tar", ["-xzf", path.resolve(cwd, fileName)], {
+    cwd: targetDir,
     stdio: ["ignore", "ignore", "inherit"],
   });
+}
 
-  // channel-shared-chunks.tar.gz is required when extensions reference shared
-  // ESM chunks under dist/. Extract at tmp root which lays them under dist/.
-  const sharedChunksTar = path.join(OUT_DIR, "channel-shared-chunks.tar.gz");
-  if (await fileExists(sharedChunksTar)) {
-    await copyFile(sharedChunksTar, path.join(tmpDir, "channel-shared-chunks.tar.gz"));
-    await runChild("tar", ["-xzf", "channel-shared-chunks.tar.gz"], {
-      cwd: tmpDir,
-      stdio: ["ignore", "ignore", "inherit"],
-    });
+async function requireStagedAsset(tmpDir, fileName, releaseTar) {
+  if (!(await fileExists(path.join(tmpDir, fileName)))) {
+    throw new Error(
+      `bundle-runner: ${fileName} missing from extracted ${releaseTar}; rebuild release assets`,
+    );
   }
+}
+
+async function stageBundle(tmpDir, { assetDir: explicitAssetDir } = {}) {
+  const assetDir = await resolveAssetDir(explicitAssetDir);
+  const releaseTar = await findReleaseTar(assetDir);
+  if (releaseTar) {
+    await copyRequiredAsset(assetDir, tmpDir, releaseTar);
+    await extractTarball(tmpDir, releaseTar);
+    for (const sidecar of [
+      "openclaw.bundle.mjs",
+      "bundle-deps.tar.gz",
+      "bundle-openclaw-pkg.tar.gz",
+      "channels.tar.gz",
+    ]) {
+      await requireStagedAsset(tmpDir, sidecar, releaseTar);
+    }
+  } else {
+    for (const sidecar of [
+      "openclaw.bundle.mjs",
+      "bundle-deps.tar.gz",
+      "bundle-openclaw-pkg.tar.gz",
+      "channels.tar.gz",
+    ]) {
+      await copyRequiredAsset(assetDir, tmpDir, sidecar);
+    }
+  }
+
+  for (const sidecar of ["bundle-deps.tar.gz", "bundle-openclaw-pkg.tar.gz"]) {
+    await extractTarball(tmpDir, sidecar);
+  }
+
+  const extensionsDir = path.join(tmpDir, "extensions");
+  await extractTarball(tmpDir, "channels.tar.gz", extensionsDir);
+
+  const sharedChunks = path.join(tmpDir, "channel-shared-chunks.tar.gz");
+  if (!(await fileExists(sharedChunks)) && !releaseTar) {
+    const source = path.join(assetDir, "channel-shared-chunks.tar.gz");
+    if (await fileExists(source)) {
+      await copyFile(source, sharedChunks);
+    }
+  }
+  if (await fileExists(sharedChunks)) {
+    await extractTarball(tmpDir, "channel-shared-chunks.tar.gz");
+  }
+  return { assetDir, releaseTar };
 }
 
 function makeSlackConfig({ signingSecret, botToken }) {
@@ -171,15 +210,10 @@ export async function runBundle({
   signingSecret = DEFAULT_SIGNING_SECRET,
   botToken = DEFAULT_BOT_TOKEN,
   slackApiUrl,
+  assetDir,
   port,
   readyTimeoutMs = 45_000,
 } = {}) {
-  if (!(await fileExists(path.join(OUT_DIR, "openclaw.bundle.mjs")))) {
-    throw new Error(
-      "bundle-runner: dist/sandbox/openclaw.bundle.mjs is missing. Run pnpm build:sandbox-bundle first.",
-    );
-  }
-
   const rawTmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-e2e-"));
   // macOS resolves /var → /private/var. Node's ESM module cache keys by URL,
   // so loading the same file via both /var and /private/var URLs produces two
@@ -197,7 +231,7 @@ export async function runBundle({
   const configPath = path.join(stateDir, "config.json");
   await mkdir(stateDir, { recursive: true });
 
-  await stageBundle(tmpDir);
+  const stagedBundle = await stageBundle(tmpDir, { assetDir });
 
   await writeFile(
     configPath,
@@ -305,6 +339,8 @@ export async function runBundle({
     tmpDir,
     homeDir,
     configPath,
+    assetDir: stagedBundle.assetDir,
+    releaseTar: stagedBundle.releaseTar,
     signingSecret,
     botToken,
     pid: child.pid,

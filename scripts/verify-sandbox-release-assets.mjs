@@ -118,6 +118,66 @@ function parseChecksums(raw) {
   return entries;
 }
 
+function extractCatalogChannelIds(catalog) {
+  const entries = Array.isArray(catalog?.entries) ? catalog.entries : [];
+  return entries
+    .map((entry) => entry?.openclaw?.channel?.id)
+    .filter((id) => typeof id === "string" && id.length > 0)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+function requireTarEntry(entries, fileName, expectedEntry) {
+  if (!entries.includes(expectedEntry)) {
+    throw new Error(fileName + " missing required entry: " + expectedEntry);
+  }
+}
+
+async function verifyNestedAssets(assetDir, contract) {
+  const channelsEntries = await listTarEntries(assetDir, "channels.tar.gz");
+  const catalog = await readJson(path.join(assetDir, "channel-catalog.json"));
+  const catalogChannelIds = extractCatalogChannelIds(catalog);
+  if (catalogChannelIds.length === 0) {
+    throw new Error("channel-catalog.json has no channel entries");
+  }
+  const archivedChannelIds = channelsEntries
+    .filter((entry) => /^[^/]+\/package\.json$/u.test(entry))
+    .map((entry) => entry.slice(0, -"/package.json".length))
+    .toSorted((left, right) => left.localeCompare(right));
+  if (archivedChannelIds.length === 0) {
+    throw new Error("channels.tar.gz contains no channel package.json entries");
+  }
+  requireTarEntry(channelsEntries, "channels.tar.gz", "slack/package.json");
+  requireTarEntry(channelsEntries, "channels.tar.gz", "slack/index.js");
+
+  const shimEntries = await listTarEntries(assetDir, "bundle-openclaw-pkg.tar.gz");
+  requireTarEntry(shimEntries, "bundle-openclaw-pkg.tar.gz", "package.json");
+  requireTarEntry(shimEntries, "bundle-openclaw-pkg.tar.gz", "node_modules/openclaw/package.json");
+  const pluginSdkSubpaths = Array.isArray(contract?.pluginSdkSubpaths)
+    ? contract.pluginSdkSubpaths
+    : [];
+  if (pluginSdkSubpaths.length === 0) {
+    throw new Error("bundle-contract.json pluginSdkSubpaths is empty");
+  }
+  for (const subpath of pluginSdkSubpaths) {
+    if (typeof subpath !== "string" || subpath.length === 0) {
+      throw new Error("bundle-contract.json has invalid pluginSdkSubpaths entry");
+    }
+    requireTarEntry(
+      shimEntries,
+      "bundle-openclaw-pkg.tar.gz",
+      "node_modules/openclaw/plugin-sdk/" + subpath + ".cjs",
+    );
+  }
+
+  const controlUiEntries = await listTarEntries(assetDir, "control-ui.tar.gz");
+  requireTarEntry(controlUiEntries, "control-ui.tar.gz", "control-ui/index.html");
+
+  const templateEntries = await listTarEntries(assetDir, "workspace-templates.tar.gz");
+  if (!templateEntries.some((entry) => entry.startsWith("templates/") && entry !== "templates/")) {
+    throw new Error("workspace-templates.tar.gz contains no template files");
+  }
+}
+
 async function main() {
   const { assetDir } = parseArgs(process.argv.slice(2));
   for (const fileName of REQUIRED_ASSETS) {
@@ -125,6 +185,7 @@ async function main() {
   }
 
   const manifest = await readJson(path.join(assetDir, "asset-manifest.json"));
+  const contract = await readJson(path.join(assetDir, "bundle-contract.json"));
   if (manifest.schemaVersion !== 1) {
     throw new Error("asset-manifest.json schemaVersion must be 1");
   }
@@ -193,6 +254,8 @@ async function main() {
         actualTarEntries.join(", "),
     );
   }
+
+  await verifyNestedAssets(assetDir, contract);
 
   const checksums = parseChecksums(await readFile(path.join(assetDir, "checksums.sha256"), "utf8"));
   const expectedChecksumFiles = [manifest.canonicalTarball, ...expectedTarEntries].toSorted(
