@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
-import { copyFile, mkdir, mkdtemp, readdir, rm, stat } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -88,17 +88,14 @@ async function findReleaseTar(assetDir) {
   );
 }
 
-function parseSmokeLine(output) {
+function parsePrefixedJsonLine(output, prefix) {
   for (const line of output.split(/\r?\n/u)) {
-    if (!line.startsWith("[bundle-smoke] ")) {
+    if (!line.startsWith(prefix)) {
       continue;
     }
-    const payload = line.slice("[bundle-smoke] ".length);
+    const payload = line.slice(prefix.length);
     try {
-      const parsed = JSON.parse(payload);
-      if (parsed?.ok === true) {
-        return parsed;
-      }
+      return JSON.parse(payload);
     } catch {
       return null;
     }
@@ -106,7 +103,12 @@ function parseSmokeLine(output) {
   return null;
 }
 
-function runBundle(cwd, homeDir, extensionsDir) {
+function parseSmokeLine(output) {
+  const parsed = parsePrefixedJsonLine(output, "[bundle-smoke] ");
+  return parsed?.ok === true ? parsed : null;
+}
+
+function runBundle(cwd, homeDir, extensionsDir, extraEnv = {}, options = {}) {
   return new Promise((resolve, reject) => {
     const start = performance.now();
     let output = "";
@@ -118,9 +120,10 @@ function runBundle(cwd, homeDir, extensionsDir) {
         PATH: process.env.PATH ?? "",
         NODE_ENV: "production",
         OPENCLAW_BUNDLE_PROFILE: "sandbox",
-        OPENCLAW_BUNDLE_SMOKE: "1",
+        ...(options.bundleSmoke === false ? {} : { OPENCLAW_BUNDLE_SMOKE: "1" }),
         OPENCLAW_PLUGIN_LOAD_PROFILE: "1",
         OPENCLAW_BUNDLED_PLUGINS_DIR: extensionsDir,
+        ...extraEnv,
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -210,6 +213,50 @@ async function main() {
       await extractTarball("channel-shared-chunks.tar.gz", tmpRoot);
     }
 
+    const contract = JSON.parse(await readFile(path.join(tmpRoot, "bundle-contract.json"), "utf8"));
+    const disabledPublicSurfaces = Array.isArray(contract.disabledPublicSurfaces)
+      ? contract.disabledPublicSurfaces
+      : [];
+    let publicSurfaceSmoke = null;
+    if (disabledPublicSurfaces.length > 0) {
+      const publicSurfaceResult = await runBundle(
+        tmpRoot,
+        homeDir,
+        extensionsDir,
+        {
+          OPENCLAW_BUNDLE_PUBLIC_SURFACE_SMOKE: JSON.stringify(disabledPublicSurfaces),
+        },
+        { bundleSmoke: false },
+      );
+      const publicSurfaceForbiddenHit = FORBIDDEN_OUTPUT.find((needle) =>
+        publicSurfaceResult.output.includes(needle),
+      );
+      if (publicSurfaceForbiddenHit) {
+        throw new Error(
+          `bundle public-surface smoke output contained forbidden text: ${publicSurfaceForbiddenHit}\n${publicSurfaceResult.output}`,
+        );
+      }
+      if (publicSurfaceResult.code !== 0) {
+        throw new Error(
+          `bundle public-surface smoke exited nonzero: ${publicSurfaceResult.code ?? publicSurfaceResult.signal}\n${publicSurfaceResult.output}`,
+        );
+      }
+      publicSurfaceSmoke = parsePrefixedJsonLine(
+        publicSurfaceResult.output,
+        "[bundle-public-surface-smoke] ",
+      );
+      if (!publicSurfaceSmoke?.ok) {
+        throw new Error(
+          `bundle public-surface smoke did not print ok:true JSON\n${publicSurfaceResult.output}`,
+        );
+      }
+      if ((publicSurfaceSmoke.results ?? []).length !== disabledPublicSurfaces.length) {
+        throw new Error(
+          `bundle public-surface smoke result count mismatch\n${publicSurfaceResult.output}`,
+        );
+      }
+    }
+
     const result = await runBundle(tmpRoot, homeDir, extensionsDir);
     const forbiddenHit = FORBIDDEN_OUTPUT.find((needle) => result.output.includes(needle));
     if (forbiddenHit) {
@@ -247,6 +294,7 @@ async function main() {
         elapsedMs: result.elapsedMs,
         bundleSmoke: smoke,
         pluginLoadProfileCount,
+        publicSurfaceSmoke,
       }),
     );
   } finally {
