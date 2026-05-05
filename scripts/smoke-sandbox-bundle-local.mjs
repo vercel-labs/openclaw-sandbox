@@ -12,6 +12,7 @@ const REPO_ROOT = path.resolve(HERE, "..");
 const DEFAULT_ASSET_DIR = path.join(REPO_ROOT, "dist", "sandbox", "release-assets");
 const FALLBACK_ASSET_DIR = path.join(REPO_ROOT, "dist", "sandbox");
 const WALL_CLOCK_MS = 60_000;
+const REQUIRED_PLUGIN_IDS = ["slack"];
 const FORBIDDEN_OUTPUT = [
   "Unable to resolve bundled plugin public surface",
   "Cannot find module",
@@ -164,6 +165,12 @@ async function copyAsset(assetDir, tmpRoot, fileName) {
   await copyFile(source, path.join(tmpRoot, fileName));
 }
 
+async function requireStagedAsset(tmpRoot, fileName, releaseTar) {
+  if (!(await exists(path.join(tmpRoot, fileName)))) {
+    throw new Error(`release tarball ${releaseTar} is missing required sidecar: ${fileName}`);
+  }
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const assetDir = await resolveAssetDir(args.assetDir);
@@ -182,7 +189,9 @@ async function main() {
     }
 
     for (const sidecar of ["bundle-deps.tar.gz", "bundle-openclaw-pkg.tar.gz", "channels.tar.gz"]) {
-      if (!(await exists(path.join(tmpRoot, sidecar)))) {
+      if (releaseTar) {
+        await requireStagedAsset(tmpRoot, sidecar, releaseTar);
+      } else if (!(await exists(path.join(tmpRoot, sidecar)))) {
         await copyAsset(assetDir, tmpRoot, sidecar);
       }
     }
@@ -191,6 +200,7 @@ async function main() {
     await extractTarball("channels.tar.gz", tmpRoot, extensionsDir);
 
     if (
+      !releaseTar &&
       !(await exists(path.join(tmpRoot, "channel-shared-chunks.tar.gz"))) &&
       (await exists(path.join(assetDir, "channel-shared-chunks.tar.gz")))
     ) {
@@ -215,6 +225,17 @@ async function main() {
     const smoke = parseSmokeLine(result.output);
     if (!smoke) {
       throw new Error(`bundle smoke did not print [bundle-smoke] ok:true JSON\n${result.output}`);
+    }
+    if (!Number.isInteger(smoke.pluginCount) || smoke.pluginCount <= 0) {
+      throw new Error(`bundle smoke loaded no plugins\n${result.output}`);
+    }
+    const pluginIds = Array.isArray(smoke.pluginIds) ? smoke.pluginIds : [];
+    for (const pluginId of REQUIRED_PLUGIN_IDS) {
+      if (!pluginIds.includes(pluginId)) {
+        throw new Error(
+          `bundle smoke missing required plugin ${pluginId}; loaded: ${pluginIds.join(", ") || "<none>"}\n${result.output}`,
+        );
+      }
     }
     const pluginLoadProfileCount = result.output
       .split(/\r?\n/u)

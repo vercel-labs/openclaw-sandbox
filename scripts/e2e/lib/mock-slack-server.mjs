@@ -115,6 +115,7 @@ export async function startMockSlackServer({
       rawBody,
       headers: { ...req.headers },
       timestamp: new Date().toISOString(),
+      timeMs: Date.now(),
     };
     calls.push(recorded);
 

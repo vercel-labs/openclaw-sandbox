@@ -3,6 +3,7 @@
 import process from "node:process";
 import { runBundle } from "./lib/bundle-runner.mjs";
 import { startMockSlackServer } from "./lib/mock-slack-server.mjs";
+import { buildAppMentionPayload, signSlackRequest } from "./lib/slack-fixture.mjs";
 
 const WALL_CLOCK_MS = 60_000;
 
@@ -32,21 +33,29 @@ async function main() {
     }
   }
   try {
-    // Probe the slack webhook with an unsigned body. If the slack channel
-    // registered, the route exists and signature verification rejects it
-    // (typically 401). If the channel did NOT register, we get 404. A 200
-    // means signature verification is missing — also a regression.
-    // Plugin route registration runs after /healthz binds, so retry briefly
-    // until we see something other than 404.
+    // Probe the slack webhook with an event_callback body and a deliberately
+    // wrong signature. If the slack channel registered, the route exists and
+    // signature verification rejects it. If the channel did not register, we
+    // get 404. A 200 means signature verification is missing.
     const probeDeadline = Date.now() + 10_000;
     let probe;
     let lastErr;
+    const badPayload = buildAppMentionPayload({ text: "<@U0E2ETESTBOT> l2 bad signature" });
+    const badRawBody = JSON.stringify(badPayload);
+    const { timestamp: badTimestamp } = signSlackRequest({
+      signingSecret: runner.signingSecret,
+      rawBody: badRawBody,
+    });
     while (Date.now() < probeDeadline) {
       try {
-        probe = await fetch(`${runner.url}/slack/events`, {
+        probe = await fetch(runner.url + "/slack/events", {
           method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ type: "url_verification", challenge: "e2e-l2" }),
+          headers: {
+            "content-type": "application/json",
+            "x-slack-request-timestamp": badTimestamp,
+            "x-slack-signature": "v0=bad-signature",
+          },
+          body: badRawBody,
         });
         lastErr = undefined;
         if (probe.status !== 404) {
@@ -80,11 +89,9 @@ async function main() {
         `slack channel did not register: POST /slack/events returned 404\nstderr:\n${stderrText}`,
       );
     }
-    if (!signatureVerified && probe.status !== 200) {
-      // 200 from url_verification challenge is acceptable in some Slack flows;
-      // reject anything else that is neither a sig-reject nor the challenge.
+    if (!signatureVerified) {
       throw new Error(
-        `slack channel /slack/events returned unexpected status ${probe.status}\nstderr:\n${stderrText}`,
+        `slack channel /slack/events failed to reject bad signature; got ${probe.status}\nstderr:\n${stderrText}`,
       );
     }
 
