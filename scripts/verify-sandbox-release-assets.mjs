@@ -109,7 +109,7 @@ function parseChecksums(raw) {
     if (!line.trim()) {
       continue;
     }
-    const match = /^([a-f0-9]{64})  (.+)$/u.exec(line);
+    const match = /^([a-f0-9]{64}) {2}(.+)$/u.exec(line);
     if (!match) {
       throw new Error("invalid checksums.sha256 line " + (index + 1) + ": " + line);
     }

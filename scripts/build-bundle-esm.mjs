@@ -389,7 +389,7 @@ async function collectNestedInstalledPackageDependencies(runtimeDeps) {
   let changed = true;
   while (changed) {
     changed = false;
-    for (const packageName of [...runtimeDeps]) {
+    for (const packageName of runtimeDeps) {
       const packageRoot = path.join(REPO_ROOT, "node_modules", packageName);
       for (const packageJsonPath of await walkFiles(packageRoot)) {
         if (path.basename(packageJsonPath) !== "package.json") {

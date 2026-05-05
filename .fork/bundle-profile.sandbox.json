@@ -1,10 +1,10 @@
 {
   "profile": "sandbox",
   "disabledOptionalNativeModules": {
-    "sharp": "build/stubs/disabled-optional.cjs",
-    "keytar": "build/stubs/disabled-optional.cjs",
-    "@reflink/reflink": "build/stubs/disabled-optional.cjs",
-    "@napi-rs/canvas": "build/stubs/disabled-optional.cjs"
+    "sharp": "scripts/sandbox-bundle/disabled-optional.cjs",
+    "keytar": "scripts/sandbox-bundle/disabled-optional.cjs",
+    "@reflink/reflink": "scripts/sandbox-bundle/disabled-optional.cjs",
+    "@napi-rs/canvas": "scripts/sandbox-bundle/disabled-optional.cjs"
   },
   "externalRuntimeDeps": ["jiti"],
   "disabledPublicSurfaces": [
