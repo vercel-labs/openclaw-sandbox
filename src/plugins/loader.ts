@@ -140,6 +140,7 @@ import {
   resolvePluginSdkAliasCandidateOrder,
   resolvePluginSdkAliasFile,
   resolvePluginRuntimeModulePath,
+  getPluginRuntimeModuleResolutionDiagnostics,
   resolvePluginSdkScopedAliasMap,
   shouldPreferNativeModuleLoad,
 } from "./sdk-alias.js";
@@ -1547,7 +1548,13 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         pluginSdkResolution: options.pluginSdkResolution,
       });
       if (!runtimeModulePath) {
-        throw new Error("Unable to resolve plugin runtime module");
+        const diagnostics = getPluginRuntimeModuleResolutionDiagnostics({
+          pluginSdkResolution: options.pluginSdkResolution,
+        });
+        logger.error(
+          `[plugins] unable to resolve plugin runtime module diagnostics=${JSON.stringify(diagnostics)}`,
+        );
+        throw new Error(`Unable to resolve plugin runtime module: ${JSON.stringify(diagnostics)}`);
       }
       const runtimeModule = withProfile(
         { source: runtimeModulePath },

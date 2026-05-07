@@ -139,7 +139,11 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       opts.proxyFetch ?? (account.config.proxy ? makeProxyFetch(account.config.proxy) : undefined);
 
     if (opts.useWebhook) {
+      log(
+        `[telegram][webhook] loading webhook runtime account=${account.accountId} port=${String(opts.webhookPort ?? account.config.webhookPort ?? 8787)} host=${opts.webhookHost ?? account.config.webhookHost ?? "127.0.0.1"} path=${opts.webhookPath ?? "/telegram-webhook"} hasSecret=${Boolean(opts.webhookSecret ?? account.config.webhookSecret)} hasPublicUrl=${Boolean(opts.webhookUrl)}`,
+      );
       const { startTelegramWebhook } = await loadTelegramMonitorWebhookRuntime();
+      log(`[telegram][webhook] runtime loaded account=${account.accountId}`);
       if (isTelegramExecApprovalHandlerConfigured({ cfg, accountId: account.accountId })) {
         registerChannelRuntimeContext({
           channelRuntime: opts.channelRuntime,
@@ -149,7 +153,9 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
           context: { token },
           abortSignal: opts.abortSignal,
         });
+        log(`[telegram][webhook] approval runtime context registered account=${account.accountId}`);
       }
+      log(`[telegram][webhook] starting local listener account=${account.accountId}`);
       await startTelegramWebhook({
         token,
         accountId: account.accountId,
@@ -165,6 +171,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         webhookCertPath: opts.webhookCertPath,
         setStatus: opts.setStatus,
       });
+      log(`[telegram][webhook] local listener started account=${account.accountId}`);
       await waitForAbortSignal(opts.abortSignal);
       return;
     }

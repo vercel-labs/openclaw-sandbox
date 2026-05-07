@@ -280,9 +280,13 @@ export async function startTelegramWebhook(opts: {
   const runtime = opts.runtime ?? defaultRuntime;
   const status = createTelegramWebhookStatusPublisher(opts.setStatus);
   status.noteWebhookStart();
+  runtime.log?.(
+    `[telegram][webhook] startup begin account=${opts.accountId ?? "default"} host=${host} port=${port} path=${path} healthPath=${healthPath} hasPublicUrl=${Boolean(opts.publicUrl)} hasCert=${Boolean(opts.webhookCertPath)}`,
+  );
   const webhookRegistrationRetryPolicy =
     opts.webhookRegistrationRetryPolicy ?? TELEGRAM_WEBHOOK_REGISTRATION_RETRY_POLICY;
   const diagnosticsEnabled = isDiagnosticsEnabled(opts.config);
+  runtime.log?.(`[telegram][webhook] creating bot account=${opts.accountId ?? "default"}`);
   const bot = createTelegramBot({
     token: opts.token,
     runtime,
@@ -290,11 +294,13 @@ export async function startTelegramWebhook(opts: {
     config: opts.config,
     accountId: opts.accountId,
   });
+  runtime.log?.(`[telegram][webhook] initializing bot account=${opts.accountId ?? "default"}`);
   await initializeTelegramWebhookBot({
     bot,
     runtime,
     abortSignal: opts.abortSignal,
   });
+  runtime.log?.(`[telegram][webhook] bot initialized account=${opts.accountId ?? "default"}`);
   const telegramWebhookRateLimiter = createFixedWindowRateLimiter({
     windowMs: WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs,
     maxRequests: WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests,
@@ -414,6 +420,9 @@ export async function startTelegramWebhook(opts: {
   });
   const boundAddress = server.address();
   const boundPort = boundAddress && typeof boundAddress !== "string" ? boundAddress.port : port;
+  runtime.log?.(
+    `[telegram][webhook] local listener bound account=${opts.accountId ?? "default"} host=${host} port=${boundPort} path=${path}`,
+  );
 
   const publicUrl = resolveWebhookPublicUrl({
     configuredPublicUrl: opts.publicUrl,
@@ -455,6 +464,9 @@ export async function startTelegramWebhook(opts: {
       return;
     }
     try {
+      runtime.log?.(
+        `[telegram][webhook] setWebhook begin account=${opts.accountId ?? "default"} url=${publicUrl}`,
+      );
       await withTelegramApiErrorLogging({
         operation: "setWebhook",
         runtime,
@@ -467,6 +479,9 @@ export async function startTelegramWebhook(opts: {
       });
     } catch (err) {
       status.noteWebhookRegistrationFailure(formatErrorMessage(err));
+      runtime.error?.(
+        `[telegram][webhook] setWebhook failed account=${opts.accountId ?? "default"}: ${formatErrorMessage(err)}`,
+      );
       throw err;
     }
     if (shutDown) {
@@ -474,6 +489,9 @@ export async function startTelegramWebhook(opts: {
     }
     webhookAdvertised = true;
     status.noteWebhookAdvertised();
+    runtime.log?.(
+      `[telegram][webhook] setWebhook ok account=${opts.accountId ?? "default"} url=${publicUrl}`,
+    );
     runtime.log?.(`webhook advertised to telegram on ${publicUrl}`);
   };
   const shouldRetryWebhookRegistration = (err: unknown): boolean =>

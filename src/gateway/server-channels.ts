@@ -231,6 +231,13 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     channelRuntimeEnvs[channelId] ??= runtimeForLogger(ensureChannelLog(channelId));
     return channelRuntimeEnvs[channelId];
   };
+  const formatLogContext = (context: Record<string, unknown>): string => {
+    try {
+      return JSON.stringify(context);
+    } catch (error) {
+      return JSON.stringify({ logContextError: formatErrorMessage(error) });
+    }
+  };
 
   const resolveAccountHealthMonitorOverride = (
     channelConfig: ChannelHealthMonitorConfig | undefined,
@@ -351,6 +358,13 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       ) {
         continue;
       }
+      ensureChannelLog(channelId).info?.(
+        `[${id}] evicting stale channel runtime state ${formatLogContext({
+          activeAccountIds: accountIds,
+          hadRestartAttempts: restartAttempts.has(restartKey(channelId, id)),
+          wasManuallyStopped: manuallyStopped.has(restartKey(channelId, id)),
+        })}`,
+      );
       store.runtimes.delete(id);
       restartAttempts.delete(restartKey(channelId, id));
       manuallyStopped.delete(restartKey(channelId, id));
@@ -365,6 +379,12 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     const plugin = getChannelPlugin(channelId);
     const startAccount = plugin?.gateway?.startAccount;
     if (!startAccount) {
+      ensureChannelLog(channelId).debug?.(
+        `[${channelId}] channel start skipped: no gateway startAccount ${formatLogContext({
+          hasPlugin: Boolean(plugin),
+          origin: getLoadedChannelPluginOrigin(channelId),
+        })}`,
+      );
       return;
     }
     const { preserveRestartAttempts = false, preserveManualStop = false } = opts;
@@ -379,19 +399,56 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     if (!accountId) {
       evictStaleChannelAccountState(channelId, store, accountIds);
     }
+    const log = ensureChannelLog(channelId);
+    log.info?.(
+      `[${channelId}] channel start plan ${formatLogContext({
+        requestedAccountId: accountId ?? null,
+        accountIds,
+        accountCount: accountIds.length,
+        origin: getLoadedChannelPluginOrigin(channelId),
+        preserveRestartAttempts,
+        preserveManualStop,
+        storeAborts: store.aborts.size,
+        storeStarting: store.starting.size,
+        storeTasks: store.tasks.size,
+        storeRuntimes: store.runtimes.size,
+        hasChannelRuntime: Boolean(channelRuntime || resolveChannelRuntime),
+        hasStartupRuntime: Boolean(resolveStartupChannelRuntime),
+      })}`,
+    );
     if (accountIds.length === 0) {
+      log.info?.(`[${channelId}] channel start skipped: no configured account ids`);
       return;
     }
 
     const startup = await runTasksWithConcurrency({
       limit: CHANNEL_STARTUP_CONCURRENCY,
       tasks: accountIds.map((id) => async () => {
+        const log = ensureChannelLog(channelId);
+        const rKey = restartKey(channelId, id);
+        log.info?.(
+          `[${id}] channel account startup enter ${formatLogContext({
+            channelId,
+            origin: getLoadedChannelPluginOrigin(channelId),
+            preserveRestartAttempts,
+            preserveManualStop,
+            restartAttempts: restartAttempts.get(rKey) ?? 0,
+            manuallyStopped: manuallyStopped.has(rKey),
+            storeHasTask: store.tasks.has(id),
+            storeHasStarting: store.starting.has(id),
+            storeHasAbort: store.aborts.has(id),
+            storeRuntime: store.runtimes.get(id) ?? null,
+          })}`,
+        );
         if (store.tasks.has(id)) {
+          log.info?.(`[${id}] channel account startup skipped: task already running`);
           return;
         }
         const existingStart = store.starting.get(id);
         if (existingStart) {
+          log.info?.(`[${id}] channel account startup waiting for existing start gate`);
           await existingStart;
+          log.info?.(`[${id}] channel account startup existing start gate settled`);
           return;
         }
 
@@ -406,7 +463,6 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         const abort = new AbortController();
         store.aborts.set(id, abort);
         let handedOffTask = false;
-        const log = ensureChannelLog(channelId);
         const runtime = ensureChannelRuntime(channelId);
         let scopedChannelRuntime: ReturnType<typeof createTaskScopedChannelRuntime> | null = null;
         let channelRuntimeForTask: ChannelRuntimeSurface | undefined;
@@ -428,46 +484,77 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         };
 
         try {
+          log.info?.(`[${id}] resolving channel account config`);
           const account = plugin.config.resolveAccount(cfg, id);
+          log.info?.(
+            `[${id}] resolved channel account config ${formatLogContext({
+              accountType: typeof account,
+              accountKeys:
+                account && typeof account === "object" ? Object.keys(account).toSorted() : [],
+            })}`,
+          );
           const enabled = plugin.config.isEnabled
             ? plugin.config.isEnabled(account, cfg)
             : isAccountEnabled(account);
+          log.info?.(`[${id}] channel account enabled check ${formatLogContext({ enabled })}`);
           if (!enabled) {
+            const reason = plugin.config.disabledReason?.(account, cfg) ?? "disabled";
+            log.info?.(
+              `[${id}] channel account startup skipped: disabled ${formatLogContext({ reason })}`,
+            );
             setRuntime(channelId, id, {
               accountId: id,
               enabled: false,
               configured: true,
               running: false,
               restartPending: false,
-              lastError: plugin.config.disabledReason?.(account, cfg) ?? "disabled",
+              lastError: reason,
             });
             return;
           }
 
           let configured = true;
           if (plugin.config.isConfigured) {
+            log.info?.(`[${id}] channel account configured check begin`);
             configured = await measureStartup(`channels.${channelId}.is-configured`, () =>
               plugin.config.isConfigured!(account, cfg),
             );
           }
+          log.info?.(
+            `[${id}] channel account configured check ${formatLogContext({ configured })}`,
+          );
           if (!configured) {
+            const reason = plugin.config.unconfiguredReason?.(account, cfg) ?? "not configured";
+            log.info?.(
+              `[${id}] channel account startup skipped: not configured ${formatLogContext({ reason })}`,
+            );
             setRuntime(channelId, id, {
               accountId: id,
               enabled: true,
               configured: false,
               running: false,
               restartPending: false,
-              lastError: plugin.config.unconfiguredReason?.(account, cfg) ?? "not configured",
+              lastError: reason,
             });
             return;
           }
 
-          const rKey = restartKey(channelId, id);
           if (!preserveManualStop) {
-            manuallyStopped.delete(rKey);
+            const hadManualStop = manuallyStopped.delete(rKey);
+            log.info?.(
+              `[${id}] channel manual-stop state cleared ${formatLogContext({ hadManualStop })}`,
+            );
           }
 
           if (abort.signal.aborted || manuallyStopped.has(rKey)) {
+            log.info?.(
+              `[${id}] channel account startup skipped: aborted or manually stopped ${formatLogContext(
+                {
+                  aborted: abort.signal.aborted,
+                  manuallyStopped: manuallyStopped.has(rKey),
+                },
+              )}`,
+            );
             setRuntime(channelId, id, {
               accountId: id,
               running: false,
@@ -477,17 +564,27 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             return;
           }
 
+          log.info?.(`[${id}] channel runtime resolution begin`);
           scopedChannelRuntime = await measureStartup(`channels.${channelId}.runtime`, async () =>
             createTaskScopedChannelRuntime({
               channelRuntime: await getChannelRuntime(channelId),
             }),
           );
           channelRuntimeForTask = scopedChannelRuntime.channelRuntime;
+          log.info?.(
+            `[${id}] channel runtime resolution complete ${formatLogContext({
+              hasChannelRuntimeForTask: Boolean(channelRuntimeForTask),
+            })}`,
+          );
 
           if (!preserveRestartAttempts) {
-            restartAttempts.delete(rKey);
+            const hadRestartAttempts = restartAttempts.delete(rKey);
+            log.info?.(
+              `[${id}] channel restart-attempt state cleared ${formatLogContext({ hadRestartAttempts })}`,
+            );
           }
           try {
+            log.info?.(`[${id}] native approval bootstrap begin`);
             stopApprovalBootstrap = await measureStartup(
               `channels.${channelId}.approval-bootstrap`,
               () =>
@@ -499,9 +596,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                   logger: log,
                 }),
             );
+            log.info?.(`[${id}] native approval bootstrap complete`);
           } catch (error) {
             log.error?.(`[${id}] native approval bootstrap failed: ${formatErrorMessage(error)}`);
           }
+          log.info?.(`[${id}] marking channel account running before provider handoff`);
           setRuntime(channelId, id, {
             accountId: id,
             enabled: true,
@@ -512,8 +611,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             lastError: null,
             reconnectAttempts: preserveRestartAttempts ? (restartAttempts.get(rKey) ?? 0) : 0,
           });
-          const task = Promise.resolve().then(() =>
-            measureStartup(`channels.${channelId}.start-account`, () =>
+          const task = Promise.resolve().then(() => {
+            log.info?.(`[${id}] channel provider startAccount begin`);
+            return measureStartup(`channels.${channelId}.start-account`, () =>
               startAccount({
                 cfg,
                 accountId: id,
@@ -525,10 +625,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 setStatus: (next) => setRuntime(channelId, id, next),
                 ...(channelRuntimeForTask ? { channelRuntime: channelRuntimeForTask } : {}),
               }),
-            ),
-          );
+            );
+          });
           const trackedPromise = task
             .then(() => {
+              log.info?.(`[${id}] channel provider startAccount resolved`);
               if (abort.signal.aborted || manuallyStopped.has(rKey)) {
                 return;
               }
@@ -538,11 +639,22 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             })
             .catch((err) => {
               const message = formatErrorMessage(err);
+              const stack = err instanceof Error && err.stack ? err.stack : null;
               setRuntime(channelId, id, { accountId: id, lastError: message });
-              log.error?.(`[${id}] channel exited: ${message}`);
+              log.error?.(
+                `[${id}] channel exited: ${message}${stack ? ` stack=${stack}` : ""} ${formatLogContext(
+                  {
+                    restartAttempts: restartAttempts.get(rKey) ?? 0,
+                    aborted: abort.signal.aborted,
+                    manuallyStopped: manuallyStopped.has(rKey),
+                  },
+                )}`,
+              );
             })
             .finally(async () => {
+              log.info?.(`[${id}] channel cleanup begin`);
               await cleanupTaskScopedApprovalRuntime("channel cleanup failed");
+              log.info?.(`[${id}] channel cleanup complete`);
               setRuntime(channelId, id, {
                 accountId: id,
                 running: false,
@@ -551,6 +663,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             })
             .then(async () => {
               if (manuallyStopped.has(rKey)) {
+                log.info?.(`[${id}] channel restart skipped: manually stopped`);
                 return;
               }
               const attempt = (restartAttempts.get(rKey) ?? 0) + 1;
@@ -581,8 +694,16 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               }
               try {
                 const restartSleepAbort = recoveryRestartSleepAbort?.signal ?? abort.signal;
+                log.info?.(
+                  `[${id}] channel restart sleep begin ${formatLogContext({
+                    delayMs,
+                    recoveryStopTimedOut: Boolean(recoveryRestartSleepAbort),
+                  })}`,
+                );
                 await sleepWithAbort(delayMs, restartSleepAbort);
+                log.info?.(`[${id}] channel restart sleep complete`);
                 if (manuallyStopped.has(rKey)) {
+                  log.info?.(`[${id}] channel restart cancelled after sleep: manually stopped`);
                   recoveryStopTimedOut.delete(rKey);
                   return;
                 }
@@ -593,12 +714,16 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 if (store.aborts.get(id) === (recoveryRestartSleepAbort ?? abort)) {
                   store.aborts.delete(id);
                 }
+                log.info?.(`[${id}] channel restart invoking startChannelInternal`);
                 await startChannelInternal(channelId, id, {
                   preserveRestartAttempts: true,
                   preserveManualStop: true,
                 });
-              } catch {
-                // abort or startup failure — next crash will retry
+              } catch (error) {
+                log.warn?.(
+                  `[${id}] channel restart sleep/start interrupted: ${formatErrorMessage(error)}`,
+                );
+                // abort or startup failure - next crash will retry
               } finally {
                 if (recoveryRestartSleepAbort) {
                   recoveryStopTimedOut.delete(rKey);
@@ -609,6 +734,12 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               }
             })
             .finally(() => {
+              log.info?.(
+                `[${id}] channel tracked task finalizer ${formatLogContext({
+                  storeTaskMatches: store.tasks.get(id) === trackedPromise,
+                  storeAbortMatches: store.aborts.get(id) === abort,
+                })}`,
+              );
               if (store.tasks.get(id) === trackedPromise) {
                 store.tasks.delete(id);
               }
@@ -618,13 +749,19 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             });
           handedOffTask = true;
           store.tasks.set(id, trackedPromise);
+          log.info?.(`[${id}] channel provider task handed off to supervisor`);
         } catch (error) {
+          const message = formatErrorMessage(error);
+          const stack = error instanceof Error && error.stack ? error.stack : null;
+          log.error?.(
+            `[${id}] channel startup failed before provider handoff: ${message}${stack ? ` stack=${stack}` : ""}`,
+          );
           if (!handedOffTask) {
             setRuntime(channelId, id, {
               accountId: id,
               running: false,
               restartPending: false,
-              lastError: formatErrorMessage(error),
+              lastError: message,
             });
           }
           throw error;
@@ -639,12 +776,24 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           if (!handedOffTask && store.aborts.get(id) === abort) {
             store.aborts.delete(id);
           }
+          log.info?.(
+            `[${id}] channel startup finalizer ${formatLogContext({
+              handedOffTask,
+              storeHasAbort: store.aborts.has(id),
+              storeHasStarting: store.starting.has(id),
+              storeHasTask: store.tasks.has(id),
+            })}`,
+          );
         }
       }),
     });
     if (startup.hasError) {
+      log.error?.(
+        `[${channelId}] channel startup batch failed: ${formatErrorMessage(startup.firstError)}`,
+      );
       throw startup.firstError;
     }
+    log.info?.(`[${channelId}] channel startup batch complete`);
   };
 
   const startChannel = async (channelId: ChannelId, accountId?: string) => {
@@ -659,8 +808,21 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     const manual = opts.manual ?? true;
     const plugin = getChannelPlugin(channelId);
     const store = getStore(channelId);
+    const log = ensureChannelLog(channelId);
+    log.info?.(
+      `[${channelId}] channel stop requested ${formatLogContext({
+        accountId: accountId ?? null,
+        manual,
+        hasPlugin: Boolean(plugin),
+        hasStopAccount: Boolean(plugin?.gateway?.stopAccount),
+        storeAborts: store.aborts.size,
+        storeStarting: store.starting.size,
+        storeTasks: store.tasks.size,
+      })}`,
+    );
     // Fast path: nothing running and no explicit plugin shutdown hook to run.
     if (!plugin?.gateway?.stopAccount && store.aborts.size === 0 && store.tasks.size === 0) {
+      log.info?.(`[${channelId}] channel stop skipped: no running accounts or stop hook`);
       return;
     }
     const cfg = getRuntimeConfig();
@@ -675,22 +837,37 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       knownIds.add(accountId);
     }
 
+    log.info?.(
+      `[${channelId}] channel stop plan ${formatLogContext({
+        knownIds: Array.from(knownIds.values()),
+        knownCount: knownIds.size,
+      })}`,
+    );
     await Promise.all(
       Array.from(knownIds.values()).map(async (id) => {
         const abort = store.aborts.get(id);
         const task = store.tasks.get(id);
         if (!abort && !task && !plugin?.gateway?.stopAccount) {
+          log.info?.(`[${id}] channel stop skipped: no account task/abort/stop hook`);
           return;
         }
         const rKey = restartKey(channelId, id);
         if (manual) {
           manuallyStopped.add(rKey);
         }
+        log.info?.(
+          `[${id}] channel stop account begin ${formatLogContext({
+            manual,
+            hadAbort: Boolean(abort),
+            hadTask: Boolean(task),
+            hasStopAccount: Boolean(plugin?.gateway?.stopAccount),
+          })}`,
+        );
         abort?.abort();
-        const log = ensureChannelLog(channelId);
         const runtime = ensureChannelRuntime(channelId);
         if (plugin?.gateway?.stopAccount) {
           const account = plugin.config.resolveAccount(cfg, id);
+          log.info?.(`[${id}] channel stopAccount hook begin`);
           await plugin.gateway.stopAccount({
             cfg,
             accountId: id,
@@ -701,6 +878,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             getStatus: () => getRuntime(channelId, id),
             setStatus: (next) => setRuntime(channelId, id, next),
           });
+          log.info?.(`[${id}] channel stopAccount hook complete`);
         }
         const stoppedCleanly = await waitForChannelStopGracefully(
           task,
@@ -724,6 +902,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         recoveryStopTimedOut.delete(rKey);
         store.aborts.delete(id);
         store.tasks.delete(id);
+        log.info?.(`[${id}] channel stop account complete`);
         setRuntime(channelId, id, {
           accountId: id,
           running: false,
@@ -735,9 +914,17 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   };
 
   const startChannels = async () => {
+    const plugins = [...listChannelPlugins()];
+    createSubsystemLogger("channels").info?.(
+      `[channels] starting all channel plugins ${formatLogContext({
+        pluginIds: plugins.map((plugin) => plugin.id),
+        pluginCount: plugins.length,
+        concurrency: CHANNEL_STARTUP_CONCURRENCY,
+      })}`,
+    );
     await runTasksWithConcurrency({
       limit: CHANNEL_STARTUP_CONCURRENCY,
-      tasks: [...listChannelPlugins()].map((plugin) => async () => {
+      tasks: plugins.map((plugin) => async () => {
         try {
           await measureStartup(`channels.${plugin.id}.start`, () => startChannel(plugin.id));
         } catch (err) {

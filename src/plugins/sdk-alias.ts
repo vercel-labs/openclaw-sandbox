@@ -779,9 +779,22 @@ export function buildPluginLoaderAliasMap(
   return result;
 }
 
-export function resolvePluginRuntimeModulePath(
+export type PluginRuntimeModuleResolutionDiagnostics = {
+  modulePath: string | null;
+  cwd: string;
+  argv1: string | null;
+  moduleUrl: string | null;
+  pluginSdkResolution: PluginSdkResolutionPreference | null;
+  orderedKinds: PluginSdkAliasCandidateKind[];
+  packageRoot: string | null;
+  candidates: string[];
+  existingCandidates: string[];
+  error: string | null;
+};
+
+export function getPluginRuntimeModuleResolutionDiagnostics(
   params: LoaderModuleResolveParams = {},
-): string | null {
+): PluginRuntimeModuleResolutionDiagnostics {
   try {
     const modulePath = resolveLoaderModulePath(params);
     const orderedKinds = resolvePluginSdkAliasCandidateOrder({
@@ -800,15 +813,39 @@ export function resolvePluginRuntimeModulePath(
           path.join(path.dirname(modulePath), "runtime", "index.ts"),
           path.join(path.dirname(modulePath), "runtime", "index.js"),
         ];
-    for (const candidate of candidates) {
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
-    }
-  } catch {
-    // ignore
+    return {
+      modulePath,
+      cwd: params.cwd ?? process.cwd(),
+      argv1: params.argv1 ?? STARTUP_ARGV1 ?? null,
+      moduleUrl: params.moduleUrl ?? null,
+      pluginSdkResolution: params.pluginSdkResolution ?? null,
+      orderedKinds,
+      packageRoot,
+      candidates,
+      existingCandidates: candidates.filter((candidate) => fs.existsSync(candidate)),
+      error: null,
+    };
+  } catch (error) {
+    return {
+      modulePath: null,
+      cwd: params.cwd ?? process.cwd(),
+      argv1: params.argv1 ?? STARTUP_ARGV1 ?? null,
+      moduleUrl: params.moduleUrl ?? null,
+      pluginSdkResolution: params.pluginSdkResolution ?? null,
+      orderedKinds: [],
+      packageRoot: null,
+      candidates: [],
+      existingCandidates: [],
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
-  return null;
+}
+
+export function resolvePluginRuntimeModulePath(
+  params: LoaderModuleResolveParams = {},
+): string | null {
+  const diagnostics = getPluginRuntimeModuleResolutionDiagnostics(params);
+  return diagnostics.existingCandidates[0] ?? null;
 }
 
 export function buildPluginLoaderJitiOptions(aliasMap: Record<string, string>) {
