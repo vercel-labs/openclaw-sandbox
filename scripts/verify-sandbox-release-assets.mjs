@@ -152,6 +152,11 @@ async function verifyNestedAssets(assetDir, contract) {
   const shimEntries = await listTarEntries(assetDir, "bundle-openclaw-pkg.tar.gz");
   requireTarEntry(shimEntries, "bundle-openclaw-pkg.tar.gz", "package.json");
   requireTarEntry(shimEntries, "bundle-openclaw-pkg.tar.gz", "node_modules/openclaw/package.json");
+  requireTarEntry(
+    shimEntries,
+    "bundle-openclaw-pkg.tar.gz",
+    "node_modules/openclaw/dist/plugins/runtime/index.js",
+  );
   const pluginSdkSubpaths = Array.isArray(contract?.pluginSdkSubpaths)
     ? contract.pluginSdkSubpaths
     : [];
